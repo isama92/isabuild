@@ -73,6 +73,11 @@ function createEntry(): Entry {
 }
 
 function tryWebgl(term: Terminal): void {
+  // WebView2 can hand out a WebGL context that paints nothing (black canvas
+  // over a live terminal, seen on Windows 11), which a try/catch cannot
+  // detect. The DOM renderer handles our throughput fine, so WebGL stays
+  // off on Windows.
+  if (navigator.userAgent.includes("Windows")) return;
   try {
     const webgl = new WebglAddon();
     webgl.onContextLoss(() => webgl.dispose());

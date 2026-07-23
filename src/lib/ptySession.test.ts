@@ -189,6 +189,24 @@ describe("attach", () => {
     expect(hoisted.handlers.size).toBe(0);
   });
 
+  it("skips the WebGL addon on Windows", async () => {
+    vi.stubGlobal("navigator", { ...navigator, userAgent: "Mozilla/5.0 (Windows NT 10.0; Win64; x64)" });
+    mockBackend();
+    attach(container, { id: nextId() });
+    await flush();
+
+    // Only the fit addon loads; WebGL is skipped (WebView2 black-canvas bug).
+    expect(hoisted.terminals.at(-1)!.loadAddon).toHaveBeenCalledTimes(1);
+  });
+
+  it("loads the WebGL addon on non-Windows platforms", async () => {
+    mockBackend();
+    attach(container, { id: nextId() });
+    await flush();
+
+    expect(hoisted.terminals.at(-1)!.loadAddon).toHaveBeenCalledTimes(2);
+  });
+
   it("surfaces spawn failures through onError", async () => {
     mockBackend({ exists: false, spawnError: "pty session 'x' already exists" });
     const id = nextId();
