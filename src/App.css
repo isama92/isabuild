@@ -56,15 +56,6 @@ body {
   margin: 0;
 }
 
-.terminal-overlay pre {
-  margin: 0;
-  padding: 0.5rem 1rem;
-  background: #101010;
-  border-radius: 6px;
-  font-size: 0.95rem;
-  user-select: text;
-}
-
 .terminal-overlay a {
   color: #6cb6ff;
 }

@@ -56,10 +56,9 @@ describe("TerminalView", () => {
       screen.getByRole("alertdialog", { name: /was not found on your PATH/i }),
     ).toBeInTheDocument();
     expect(screen.getByText(/was not found on your PATH/i)).toBeInTheDocument();
-    expect(screen.getByText("npm install -g @anthropic-ai/claude-code")).toBeInTheDocument();
-    expect(screen.getByRole("link")).toHaveAttribute(
+    expect(screen.getByRole("link", { name: /installation guide/i })).toHaveAttribute(
       "href",
-      "https://docs.claude.com/en/docs/claude-code",
+      "https://code.claude.com/docs/en/quickstart#step-1-install-claude-code",
     );
   });
 

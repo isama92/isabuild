@@ -56,17 +56,16 @@ export function TerminalView({ sessionId, cmd }: TerminalViewProps) {
           {overlay.kind === "exit" && overlay.exitCode === NOT_FOUND_EXIT_CODE ? (
             <>
               <h2 id="overlay-title">Claude Code was not found on your PATH</h2>
-              <p>Install it, then restart the session:</p>
-              <pre>npm install -g @anthropic-ai/claude-code</pre>
               <p>
-                Setup guide:{" "}
+                Install it following the{" "}
                 <a
-                  href="https://docs.claude.com/en/docs/claude-code"
+                  href="https://code.claude.com/docs/en/quickstart#step-1-install-claude-code"
                   target="_blank"
                   rel="noreferrer"
                 >
-                  docs.claude.com/en/docs/claude-code
+                  installation guide
                 </a>
+                , then restart the session.
               </p>
             </>
           ) : overlay.kind === "exit" ? (
