@@ -5,7 +5,7 @@
 use tauri::{AppHandle, Emitter, State};
 
 use crate::pty::{PtyEvent, PtyManager, SpawnParams};
-use crate::spawn::{joined_command, shell_spec};
+use crate::spawn::{default_cwd, joined_command, shell_spec};
 
 #[derive(serde::Serialize, Clone)]
 #[serde(rename_all = "camelCase")]
@@ -45,12 +45,25 @@ pub async fn pty_spawn(
 ) -> Result<(), String> {
     let command = joined_command(cmd.as_deref(), &args);
     let spec = shell_spec(command.as_deref());
+    let cwd = match cwd {
+        Some(dir) => {
+            let dir = std::path::PathBuf::from(dir);
+            if !dir.is_dir() {
+                return Err(format!(
+                    "working directory '{}' does not exist or is not a directory",
+                    dir.display()
+                ));
+            }
+            Some(dir)
+        }
+        None => default_cwd(),
+    };
     state
         .spawn(
             SpawnParams {
                 id,
                 spec,
-                cwd: cwd.map(std::path::PathBuf::from),
+                cwd,
                 cols,
                 rows,
             },

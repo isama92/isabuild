@@ -444,6 +444,24 @@ mod tests {
         }
 
         #[test]
+        fn spawn_honours_requested_cwd() {
+            let m = manager();
+            let (sink, rx) = channel_sink();
+            // Canonicalise and print the physical path (`pwd -P`): macOS's
+            // $TMPDIR has a trailing slash and sits behind the /var symlink,
+            // which would break a naive substring comparison.
+            let dir = std::fs::canonicalize(std::env::temp_dir()).expect("canonical temp dir");
+            let mut p = params("tcwd", SH, &["-c", "pwd -P"]);
+            p.cwd = Some(dir.clone());
+            m.spawn(p, sink).unwrap();
+            let events = drain(rx);
+            assert!(
+                decoded_output(&events).contains(dir.to_str().expect("utf-8 temp dir")),
+                "child must start in the requested cwd"
+            );
+        }
+
+        #[test]
         fn missing_command_exits_127() {
             let m = manager();
             let (sink, rx) = channel_sink();

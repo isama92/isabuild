@@ -101,6 +101,44 @@ pub fn windows_spec(git_bash: Option<PathBuf>, cmd: Option<&str>) -> SpawnSpec {
     }
 }
 
+/// Default working directory for new PTY sessions: the directory the user
+/// launched the app from, not wherever the process happens to be.
+///
+/// `$INIT_CWD` (set by npm to the invocation directory) wins in dev, where
+/// the process cwd points inside the build tooling's directories; the
+/// process cwd covers a bundled app launched from a terminal; home is the
+/// last resort for desktop launchers, whose cwd is often the filesystem
+/// root. A folder picker replaces this heuristic in Part 3.
+pub fn default_cwd() -> Option<PathBuf> {
+    resolve_default_cwd(
+        std::env::var_os("INIT_CWD").map(PathBuf::from),
+        std::env::current_dir().ok(),
+        std::env::home_dir(),
+        |p| p.is_dir(),
+    )
+}
+
+/// Pure resolution logic behind [`default_cwd`]; candidates and the
+/// directory check are injected so tests need no real environment.
+pub fn resolve_default_cwd<F: Fn(&Path) -> bool>(
+    init_cwd: Option<PathBuf>,
+    process_cwd: Option<PathBuf>,
+    home: Option<PathBuf>,
+    is_dir: F,
+) -> Option<PathBuf> {
+    // A path without a parent is a filesystem root ("/", "C:\"): that is a
+    // desktop-launcher artifact, not a place the user chose to start in.
+    let not_root = |p: &PathBuf| p.parent().is_some();
+    [
+        init_cwd.filter(not_root),
+        process_cwd.filter(not_root),
+        home,
+    ]
+    .into_iter()
+    .flatten()
+    .find(|p| is_dir(p))
+}
+
 /// Build the spec for the current platform. `cmd: None` yields a plain
 /// interactive login shell (used by later parts for the bottom terminal).
 pub fn shell_spec(cmd: Option<&str>) -> SpawnSpec {
@@ -197,6 +235,57 @@ mod tests {
         let spec = windows_spec(None, None);
         assert_eq!(spec.program, "powershell.exe");
         assert_eq!(spec.args, vec!["-NoLogo"]);
+    }
+
+    #[test]
+    fn resolve_default_cwd_prefers_init_cwd() {
+        let resolved = resolve_default_cwd(
+            Some(PathBuf::from("/repo")),
+            Some(PathBuf::from("/repo/src-tauri")),
+            Some(PathBuf::from("/home/user")),
+            |_| true,
+        );
+        assert_eq!(resolved, Some(PathBuf::from("/repo")));
+    }
+
+    #[test]
+    fn resolve_default_cwd_falls_back_to_process_cwd() {
+        let resolved = resolve_default_cwd(
+            None,
+            Some(PathBuf::from("/somewhere")),
+            Some(PathBuf::from("/home/user")),
+            |_| true,
+        );
+        assert_eq!(resolved, Some(PathBuf::from("/somewhere")));
+    }
+
+    #[test]
+    fn resolve_default_cwd_skips_filesystem_root() {
+        // Desktop launchers often start apps with cwd "/".
+        let resolved = resolve_default_cwd(
+            None,
+            Some(PathBuf::from("/")),
+            Some(PathBuf::from("/home/user")),
+            |_| true,
+        );
+        assert_eq!(resolved, Some(PathBuf::from("/home/user")));
+    }
+
+    #[test]
+    fn resolve_default_cwd_skips_missing_directories() {
+        let home = PathBuf::from("/home/user");
+        let resolved = resolve_default_cwd(
+            Some(PathBuf::from("/gone")),
+            Some(PathBuf::from("/also-gone")),
+            Some(home.clone()),
+            |p| p == home.as_path(),
+        );
+        assert_eq!(resolved, Some(home));
+    }
+
+    #[test]
+    fn resolve_default_cwd_none_when_nothing_usable() {
+        assert_eq!(resolve_default_cwd(None, None, None, |_| true), None);
     }
 
     #[test]
