@@ -1,0 +1,58 @@
+# isabuild
+
+A cross-platform desktop app (macOS, Linux, Windows) that embeds Claude Code in a terminal and wraps it with live git tooling: a real-time changed-files panel, diff viewer, branch/remote operations, and a graphical 3-pane merge conflict resolver.
+
+## Stack
+
+- **Shell**: Tauri 2 (Rust backend)
+- **Frontend**: React 18 + TypeScript + Vite, Zustand, react-resizable-panels
+- **Terminals**: xterm.js + `portable-pty` (ConPTY on Windows)
+- **Git**: system `git` binary via subprocess (porcelain/plumbing output only)
+- **Diff viewer**: Monaco Editor · **Merge editor**: CodeMirror 6
+
+## Development
+
+```bash
+npm install
+npm run tauri dev      # run the app in dev mode
+npm run tauri build    # produce release bundles (DMG / AppImage+deb / MSI)
+cargo test --manifest-path src-tauri/Cargo.toml   # backend tests
+npm test               # frontend tests (vitest)
+```
+
+Prerequisites: Rust stable, Node 20+, system `git`, and [Claude Code](https://docs.claude.com/en/docs/claude-code) installed. On Windows, Git for Windows is required.
+
+## Roadmap
+
+Each part is an independent plan (see `plans/`), executed in order. A part is done only when its acceptance criteria pass on macOS, Linux and Windows. Tick the box when a part is completed.
+
+- [ ] **Part 1 — Claude Code terminal panel** (`plans/PLAN-1-claude-code-panel.md`)
+  Tauri scaffold + PTY infrastructure + xterm.js terminal running Claude Code. Foundation for every later terminal.
+
+- [ ] **Part 2 — Layout shell + bottom terminal**
+  Resizable panel layout: main area with tabs, right sidebar placeholder, collapsible bottom panel running the user's shell (reuses the Part 1 PTY manager). Keybinding to toggle.
+
+- [ ] **Part 3 — Git status panel**
+  Repo picker, `git status --porcelain=v2 -z` parsing, colored file list (green added, yellow modified, red deleted), debounced file watcher for live refresh.
+
+- [ ] **Part 4 — Diff viewer**
+  Click a file → Monaco diff editor in a main-area tab. HEAD vs working tree, staged/unstaged toggle, rename/binary/untracked handling.
+
+- [ ] **Part 5 — Branch & remote operations**
+  Branch dropdown (switch/create), ahead/behind badges, fetch/pull/push with streamed progress and error dialogs.
+
+- [ ] **Part 6 — Merge conflicts MVP**
+  Merge command, conflict detection, conflicted-file markers, per-conflict Accept ours / theirs / both, resolve → `git add`, merge continue/abort.
+
+- [ ] **Part 7 — Full 3-pane merge editor**
+  JetBrains-style ours | result | theirs on CodeMirror 6: chunk model from `git show :1: :2: :3:`, arrow gutters, scroll sync, auto-apply of non-conflicting changes.
+
+- [ ] **Part 8 — Polish & packaging**
+  Themes, settings, keybindings, PTY cleanup on close, Tauri bundling and signing.
+
+## Global decisions
+
+- Git operations shell out to the system `git` binary — inherits the user's SSH agent, credential helpers and hooks. Human-readable git output is never parsed.
+- PTYs live in the Rust backend keyed by id; the frontend attaches and re-attaches. PTY lifetime is never tied to a React component.
+- Claude Code manages its own subscription auth; the app just gives it a PTY.
+
