@@ -16,14 +16,18 @@ body {
   position: relative;
   height: 100%;
   width: 100%;
+  /* Inset lives on the wrapper, NOT on the container xterm measures:
+     FitAddon reads the container's computed size, and padding there is
+     engine-dependently included in it, overflowing the grid past the
+     inset. Extra room at the bottom keeps the TUI status line off the
+     window border. */
+  padding: 4px 0 8px 4px;
+  box-sizing: border-box;
 }
 
 .terminal-container {
   height: 100%;
   width: 100%;
-  /* xterm renders its own padding-less grid; a small inset looks nicer. */
-  padding: 4px 0 0 4px;
-  box-sizing: border-box;
 }
 
 .terminal-overlay {
