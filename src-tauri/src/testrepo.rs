@@ -8,6 +8,17 @@
 //! [`repo_with_bare_remote`] is what lets the network operations be tested at
 //! all: a bare repository on the filesystem is a perfectly ordinary git remote,
 //! so fetch, pull and push run end to end with no network and no credentials.
+//!
+//! To check a fixture really is self-sufficient, run the suite the way a bare CI
+//! runner sees the world — with no global or system git config at all:
+//!
+//! ```text
+//! GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_SYSTEM=/dev/null \
+//!   cargo test --manifest-path src-tauri/Cargo.toml
+//! ```
+//!
+//! A developer's own global identity otherwise masks anything the fixture forgot
+//! to set for the code under test.
 
 use std::path::Path;
 use std::process::Command;
@@ -49,11 +60,16 @@ pub fn git_raw(dir: &Path, args: &[&str]) -> std::process::Output {
 /// fixture's own commands, but the code under test builds its commands through
 /// `git::git_command`, which sets no config env — so without these, a developer
 /// with `core.autocrlf=true` or `commit.gpgsign=true` globally would get
-/// different results from the same test.
+/// different results from the same test, and a machine with *no* git identity
+/// (a bare CI runner) would fail outright wherever production code makes a
+/// commit: a merging `pull`, and `stash push`, both need a committer.
 pub fn empty_repo() -> tempfile::TempDir {
     let dir = tempfile::tempdir().expect("temp dir");
     git_in(dir.path(), &["init", "--quiet", "-b", "main"]);
     for (key, value) in [
+        // Identity for commits made by the code under test, not by the fixture.
+        ("user.name", "isabuild test"),
+        ("user.email", "test@example.invalid"),
         ("core.autocrlf", "false"),
         ("commit.gpgsign", "false"),
         ("tag.gpgsign", "false"),
