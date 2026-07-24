@@ -32,10 +32,10 @@ Each part is an independent plan (see `plans/`), executed in order. A part is do
   Tauri scaffold + PTY infrastructure + xterm.js terminal running Claude Code. Foundation for every later terminal.
 
 - [ ] **Part 2 — Layout shell + bottom terminal**
-  Resizable panel layout: main area with tabs, right sidebar placeholder, collapsible bottom panel running the user's shell (reuses the Part 1 PTY manager). Keybinding to toggle.
+  IDE-style resizable regions (split panes, not browser tabs): a large main area running Claude Code above a collapsible bottom strip running the user's login shell (reuses the Part 1 PTY manager), so both are usable at once. Hide or show the terminal with its close button, the status-bar toggle, or Ctrl+1.
 
 - [ ] **Part 3 — Git status panel**
-  Repo picker, `git status --porcelain=v2 -z` parsing, colored file list (green added, yellow modified, red deleted), debounced file watcher for live refresh.
+  Adds the resizable sidebar region and fills it: repo picker, `git status --porcelain=v2 -z` parsing, colored file list (green added, yellow modified, red deleted), debounced file watcher for live refresh.
 
 - [ ] **Part 4 — Diff viewer**
   Click a file → Monaco diff editor in a main-area tab. HEAD vs working tree, staged/unstaged toggle, rename/binary/untracked handling.

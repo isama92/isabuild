@@ -1,8 +1,8 @@
-import { TerminalView } from "./components/TerminalView";
+import { Layout } from "./components/Layout";
 import "./App.css";
 
 function App() {
-  return <TerminalView sessionId="claude-main" cmd="claude" />;
+  return <Layout />;
 }
 
 export default App;

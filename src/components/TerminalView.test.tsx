@@ -26,8 +26,23 @@ beforeEach(() => {
   hoisted.restartMock.mockResolvedValue(undefined);
 });
 
+const CLAUDE_INSTALL_URL =
+  "https://code.claude.com/docs/en/quickstart#step-1-install-claude-code";
+
 function renderView() {
-  return render(<TerminalView sessionId="claude-main" cmd="claude" />);
+  return render(
+    <TerminalView
+      sessionId="claude-main"
+      cmd="claude"
+      label="Claude Code"
+      installHintUrl={CLAUDE_INSTALL_URL}
+    />,
+  );
+}
+
+// A plain shell terminal: a label, no cmd, no install hint, autofocused.
+function renderShell() {
+  return render(<TerminalView sessionId="shell-main" label="Terminal" autoFocus />);
 }
 
 describe("TerminalView", () => {
@@ -108,5 +123,25 @@ describe("TerminalView", () => {
 
     expect(await screen.findByText("Failed to start session")).toBeInTheDocument();
     expect(screen.getByText("spawn failed")).toBeInTheDocument();
+  });
+
+  it("shows a generic exit for a shell, not install guidance, on exit 127", () => {
+    renderShell();
+    act(() => hoisted.lastOpts!.onExit!({ exitCode: 127 }));
+    expect(screen.getByText("Terminal exited (code 127)")).toBeInTheDocument();
+    // Without an installHintUrl there is nothing to install.
+    expect(screen.queryByRole("link", { name: /installation guide/i })).not.toBeInTheDocument();
+  });
+
+  it("uses the label in the clean-exit message and restart button for a shell", () => {
+    renderShell();
+    act(() => hoisted.lastOpts!.onExit!({ exitCode: 0 }));
+    expect(screen.getByText("Session ended")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /restart terminal/i })).toBeInTheDocument();
+  });
+
+  it("forwards autoFocus into the attach options", () => {
+    renderShell();
+    expect(hoisted.lastOpts!.autoFocus).toBe(true);
   });
 });

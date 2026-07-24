@@ -24,6 +24,8 @@ export interface AttachOptions {
   id: string;
   /** Command run through the platform shell; omit for a plain shell. */
   cmd?: string;
+  /** Focus the terminal once it is attached and wired. */
+  autoFocus?: boolean;
   onExit?: (info: PtyExitInfo) => void;
   /** Called when spawning or wiring the session fails. */
   onError?: (error: unknown) => void;
@@ -192,6 +194,12 @@ async function initialize(
   });
   observer.observe(container);
   e.resizeObserver = observer;
+
+  // No await since the last generation check, so this attach still owns the
+  // entry: safe to grab focus. Mirrors restart(), which also focuses.
+  if (opts.autoFocus) {
+    e.term.focus();
+  }
 }
 
 function teardown(e: Entry): void {

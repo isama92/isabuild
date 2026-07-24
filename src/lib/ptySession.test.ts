@@ -207,6 +207,22 @@ describe("attach", () => {
     expect(hoisted.terminals.at(-1)!.loadAddon).toHaveBeenCalledTimes(2);
   });
 
+  it("focuses the terminal after wiring when autoFocus is set", async () => {
+    mockBackend();
+    attach(container, { id: nextId(), autoFocus: true });
+    await flush();
+
+    expect(hoisted.terminals.at(-1)!.focus).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not focus the terminal when autoFocus is absent", async () => {
+    mockBackend();
+    attach(container, { id: nextId() });
+    await flush();
+
+    expect(hoisted.terminals.at(-1)!.focus).not.toHaveBeenCalled();
+  });
+
   it("surfaces spawn failures through onError", async () => {
     mockBackend({ exists: false, spawnError: "pty session 'x' already exists" });
     const id = nextId();
