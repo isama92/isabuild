@@ -52,4 +52,30 @@ describe("layoutStore", () => {
     useLayoutStore.getState().setBottomTerminalVisible(true);
     expect(useLayoutStore.getState().bottomTerminalAutoFocus).toBe(true);
   });
+
+  it("starts with the status panel visible at the default size", () => {
+    const state = useLayoutStore.getState();
+    expect(state.statusPanelVisible).toBe(true);
+    expect(state.statusPanelSize).toBe(22);
+  });
+
+  it("toggleStatusPanel flips visibility both ways", () => {
+    const { toggleStatusPanel } = useLayoutStore.getState();
+    toggleStatusPanel();
+    expect(useLayoutStore.getState().statusPanelVisible).toBe(false);
+    toggleStatusPanel();
+    expect(useLayoutStore.getState().statusPanelVisible).toBe(true);
+  });
+
+  it("setStatusPanelVisible is idempotent", () => {
+    const { setStatusPanelVisible } = useLayoutStore.getState();
+    setStatusPanelVisible(false);
+    setStatusPanelVisible(false);
+    expect(useLayoutStore.getState().statusPanelVisible).toBe(false);
+  });
+
+  it("setStatusPanelSize stores the value", () => {
+    useLayoutStore.getState().setStatusPanelSize(35);
+    expect(useLayoutStore.getState().statusPanelSize).toBe(35);
+  });
 });

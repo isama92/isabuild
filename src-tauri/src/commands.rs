@@ -2,10 +2,14 @@
 //! blocking PTY writes stay off the main thread; they return `Result<_, String>`
 //! with actionable messages for the frontend.
 
+use std::path::{Path, PathBuf};
+
 use tauri::{AppHandle, Emitter, State};
 
+use crate::git::{self, GitStatus};
 use crate::pty::{PtyEvent, PtyManager, SpawnParams};
 use crate::spawn::{default_cwd, joined_command, shell_spec};
+use crate::watcher::GitWatcher;
 
 #[derive(serde::Serialize, Clone)]
 #[serde(rename_all = "camelCase")]
@@ -99,4 +103,44 @@ pub async fn pty_kill(state: State<'_, PtyManager>, id: String) -> Result<(), St
 #[tauri::command]
 pub async fn pty_exists(state: State<'_, PtyManager>, id: String) -> Result<bool, String> {
     Ok(state.exists(&id))
+}
+
+/// Read the working-tree status of the repository containing `path`. With
+/// `path: None` we resolve the app's launch directory (`spawn::default_cwd`,
+/// the same directory the bottom terminal opens in) — Part 3 ships without a
+/// folder picker, so this is the sole repo source for now.
+///
+/// The `git` subprocess blocks, so it runs on the blocking pool rather than
+/// stalling an async runtime worker (a git status on a large repo is not fast).
+#[tauri::command]
+pub async fn git_status(path: Option<String>) -> Result<GitStatus, String> {
+    let start = match path {
+        Some(p) => PathBuf::from(p),
+        None => default_cwd()
+            .or_else(|| std::env::current_dir().ok())
+            .ok_or_else(|| "could not determine a working directory".to_string())?,
+    };
+    tauri::async_runtime::spawn_blocking(move || git::status_from(&start))
+        .await
+        .map_err(|e| format!("git status task failed: {e}"))?
+        .map_err(|e| e.to_string())
+}
+
+/// (Re)start the debounced file watcher on `repo_root`; changes there emit
+/// `repo://changed`, which the frontend answers by re-requesting `git_status`.
+#[tauri::command]
+pub async fn git_watch(
+    app: AppHandle,
+    watcher: State<'_, GitWatcher>,
+    repo_root: String,
+) -> Result<(), String> {
+    watcher
+        .watch(
+            move || {
+                // Emit failures only happen during webview teardown; ignore.
+                let _ = app.emit("repo://changed", ());
+            },
+            Path::new(&repo_root),
+        )
+        .map_err(|e| e.to_string())
 }

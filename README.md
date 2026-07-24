@@ -31,10 +31,10 @@ Each part is an independent plan (see `plans/`), executed in order. A part is do
 - [x] **Part 1 — Claude Code terminal panel** (`plans/PLAN-1-claude-code-panel.md`)
   Tauri scaffold + PTY infrastructure + xterm.js terminal running Claude Code. Foundation for every later terminal.
 
-- [ ] **Part 2 — Layout shell + bottom terminal**
+- [x] **Part 2 — Layout shell + bottom terminal**
   IDE-style resizable regions (split panes, not browser tabs): a large main area running Claude Code above a collapsible bottom strip running the user's login shell (reuses the Part 1 PTY manager), so both are usable at once. Hide or show the terminal with its close button, the status-bar toggle, or Alt+1; an exiting shell closes the region too.
 
-- [ ] **Part 3 — Git status panel**
+- [x] **Part 3 — Git status panel**
   Adds the resizable sidebar region and fills it: repo picker, `git status --porcelain=v2 -z` parsing, colored file list (green added, yellow modified, red deleted), debounced file watcher for live refresh.
 
 - [ ] **Part 4 — Diff viewer**
