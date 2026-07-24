@@ -207,6 +207,40 @@ describe("attach", () => {
     expect(hoisted.terminals.at(-1)!.loadAddon).toHaveBeenCalledTimes(2);
   });
 
+  it("resets the terminal when spawning a fresh session", async () => {
+    mockBackend({ exists: false });
+    attach(container, { id: nextId() });
+    await flush();
+
+    // Clears stale scrollback so a session reopened after exit starts clean.
+    expect(hoisted.terminals.at(-1)!.reset).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not reset when re-attaching to a live session", async () => {
+    mockBackend({ exists: true });
+    attach(container, { id: nextId() });
+    await flush();
+
+    // A running session's scrollback must survive re-attach.
+    expect(hoisted.terminals.at(-1)!.reset).not.toHaveBeenCalled();
+  });
+
+  it("focuses the terminal after wiring when autoFocus is set", async () => {
+    mockBackend();
+    attach(container, { id: nextId(), autoFocus: true });
+    await flush();
+
+    expect(hoisted.terminals.at(-1)!.focus).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not focus the terminal when autoFocus is absent", async () => {
+    mockBackend();
+    attach(container, { id: nextId() });
+    await flush();
+
+    expect(hoisted.terminals.at(-1)!.focus).not.toHaveBeenCalled();
+  });
+
   it("surfaces spawn failures through onError", async () => {
     mockBackend({ exists: false, spawnError: "pty session 'x' already exists" });
     const id = nextId();
@@ -287,6 +321,8 @@ describe("restart", () => {
     attach(container, { id, cmd: "claude" });
     await flush();
     invokeMock.mockClear();
+    // Ignore the reset the initial fresh spawn performs; assert restart's own.
+    hoisted.terminals.at(-1)!.reset.mockClear();
     mockBackend();
 
     await restart(id, "claude");

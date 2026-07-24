@@ -74,3 +74,115 @@ body {
 .terminal-overlay button:hover {
   background: #3d7bf0;
 }
+
+/* --- Workspace layout (Part 2) --- */
+
+.workspace {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  width: 100%;
+}
+
+/* The resizable group fills the space above the status bar. min-height:0 lets
+   its panels shrink so the terminals can actually reflow to fit. */
+.panel-group {
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
+/* Applied to each Panel's inner box: a header row over a filling body. */
+.panel {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.panel-header {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  height: 28px;
+  padding: 0 10px;
+  background: #252526;
+  border-bottom: 1px solid #333;
+  color: #cccccc;
+  font: 12px/1 system-ui, sans-serif;
+  user-select: none;
+}
+
+.panel-header-title {
+  font-weight: 600;
+  letter-spacing: 0.02em;
+}
+
+.panel-body {
+  position: relative;
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
+.panel-close {
+  border: none;
+  background: transparent;
+  color: #cccccc;
+  font-size: 16px;
+  line-height: 1;
+  padding: 2px 6px;
+  border-radius: 4px;
+  cursor: pointer;
+}
+
+.panel-close:hover {
+  background: #3a3a3a;
+  color: #fff;
+}
+
+/* The drag handle between panels. react-resizable-panels also stamps a
+   [data-separator] attribute on this element. */
+.separator {
+  flex: 0 0 auto;
+  height: 4px;
+  background: #333;
+  cursor: row-resize;
+}
+
+.separator:hover {
+  background: #2f6feb;
+}
+
+.status-bar {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  height: 24px;
+  padding: 0 8px;
+  background: #252526;
+  border-top: 1px solid #333;
+}
+
+.status-bar-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  border: none;
+  background: transparent;
+  color: #cccccc;
+  font: 12px/1 system-ui, sans-serif;
+  padding: 3px 8px;
+  border-radius: 4px;
+  cursor: pointer;
+}
+
+.status-bar-toggle:hover {
+  background: #3a3a3a;
+  color: #fff;
+}
+
+.status-bar-toggle[aria-pressed="true"] {
+  color: #6cb6ff;
+}

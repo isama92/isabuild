@@ -24,6 +24,8 @@ export interface AttachOptions {
   id: string;
   /** Command run through the platform shell; omit for a plain shell. */
   cmd?: string;
+  /** Focus the terminal once it is attached and wired. */
+  autoFocus?: boolean;
   onExit?: (info: PtyExitInfo) => void;
   /** Called when spawning or wiring the session fails. */
   onError?: (error: unknown) => void;
@@ -144,6 +146,11 @@ async function initialize(
     // Re-attached to a live session: sync its size to the current layout.
     await invoke("pty_resize", { id: opts.id, cols: e.term.cols, rows: e.term.rows });
   } else {
+    // Fresh PTY into a possibly-reused terminal (e.g. reopened after the
+    // previous session exited): clear any stale scrollback so the new session
+    // starts clean. Only runs when no live session exists, so it can never
+    // wipe a running terminal.
+    e.term.reset();
     await invoke("pty_spawn", {
       id: opts.id,
       cmd: opts.cmd ?? null,
@@ -192,6 +199,12 @@ async function initialize(
   });
   observer.observe(container);
   e.resizeObserver = observer;
+
+  // No await since the last generation check, so this attach still owns the
+  // entry: safe to grab focus. Mirrors restart(), which also focuses.
+  if (opts.autoFocus) {
+    e.term.focus();
+  }
 }
 
 function teardown(e: Entry): void {
