@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { render } from "@testing-library/react";
 import { getStatus, onRepoChanged, startWatch, type GitStatus } from "../lib/gitStatus";
+import { getBranchState } from "../lib/gitBranch";
 import { initialGitState, useGitStore } from "../store/gitStore";
 import { useRepoWatch } from "./useRepoWatch";
 
@@ -10,9 +11,25 @@ vi.mock("../lib/gitStatus", () => ({
   onRepoChanged: vi.fn(),
 }));
 
+vi.mock("../lib/gitBranch", () => ({ getBranchState: vi.fn() }));
+
 const getStatusMock = vi.mocked(getStatus);
 const startWatchMock = vi.mocked(startWatch);
 const onRepoChangedMock = vi.mocked(onRepoChanged);
+const getBranchStateMock = vi.mocked(getBranchState);
+
+const BRANCH_STATE = {
+  current: "main",
+  detachedSha: null,
+  unborn: false,
+  upstream: "origin/main",
+  remote: "origin",
+  ahead: 0,
+  behind: 0,
+  lastFetch: null,
+  locals: [],
+  remotes: [],
+};
 
 function Harness() {
   useRepoWatch();
@@ -32,6 +49,7 @@ beforeEach(() => {
   unlisten = vi.fn();
   repoChangedCb = undefined;
   getStatusMock.mockResolvedValue({ repoRoot: "/repo", staged: [], unstaged: [] });
+  getBranchStateMock.mockResolvedValue(BRANCH_STATE);
   startWatchMock.mockResolvedValue(undefined);
   onRepoChangedMock.mockImplementation((cb: () => void) => {
     repoChangedCb = cb;
@@ -62,6 +80,50 @@ describe("useRepoWatch", () => {
     await flush();
 
     expect(getStatusMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("reads the branch state on mount, after the root is resolved", async () => {
+    render(<Harness />);
+    await flush();
+
+    expect(getBranchStateMock).toHaveBeenCalledWith("/repo");
+    expect(useGitStore.getState().branch).toEqual(BRANCH_STATE);
+  });
+
+  it("re-reads the branch state too when repo://changed fires", async () => {
+    // The watcher covers .git, so a branch switch made in the bottom terminal
+    // updates the status bar with no button press.
+    render(<Harness />);
+    await flush();
+    getBranchStateMock.mockClear();
+
+    repoChangedCb!();
+    await flush();
+
+    expect(getBranchStateMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("skips both reads while one of our own operations is running", async () => {
+    render(<Harness />);
+    await flush();
+    getStatusMock.mockClear();
+    getBranchStateMock.mockClear();
+    // A fetch re-fires the watcher repeatedly for its whole duration.
+    useGitStore.setState({ op: { id: "fetch-1", kind: "fetch", progress: "" } });
+
+    repoChangedCb!();
+    await flush();
+
+    expect(getStatusMock).not.toHaveBeenCalled();
+    expect(getBranchStateMock).not.toHaveBeenCalled();
+  });
+
+  it("does not read branch state when the directory is not a repo", async () => {
+    getStatusMock.mockRejectedValue(new Error("not a git repository"));
+    render(<Harness />);
+    await flush();
+
+    expect(getBranchStateMock).not.toHaveBeenCalled();
   });
 
   it("does not start a watcher when the directory is not a repo", async () => {

@@ -17,7 +17,7 @@ use std::path::{Component, Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
-use crate::git::{git_command, map_io_err, GitError};
+use crate::git::{git_command, head_short_sha, map_io_err, GitError};
 
 /// Line ending of the working-tree file, so a save writes it back unchanged.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -132,23 +132,6 @@ pub fn write_worktree_file(
     temp.persist(&target)
         .map_err(|e| DiffError::Io(path.to_string(), e.error.to_string()))?;
     Ok(())
-}
-
-/// `git rev-parse --short HEAD`. A non-zero exit means an unborn HEAD (a repo
-/// with no commits yet), which is a normal state, not an error.
-pub fn head_short_sha(root: &Path) -> Result<Option<String>, DiffError> {
-    let output = git_command(root)
-        .args(["rev-parse", "--short", "HEAD"])
-        .output()
-        .map_err(map_io_err)?;
-    if !output.status.success() {
-        return Ok(None);
-    }
-    Ok(Some(
-        String::from_utf8_lossy(&output.stdout)
-            .trim_end()
-            .to_string(),
-    ))
 }
 
 /// `git cat-file blob HEAD:<path>` — the blob exactly as stored (no smudge
@@ -302,8 +285,7 @@ pub fn apply_eol(text: &str, eol: Eol) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::path::Path;
-    use std::process::Command;
+    use crate::testrepo::{git_in, repo_with_commit};
 
     #[test]
     fn detects_lf_and_crlf_and_defaults_to_lf() {
@@ -372,38 +354,6 @@ mod tests {
         assert!(check_relative("/etc/passwd").is_err());
         #[cfg(windows)]
         assert!(check_relative("C:\\Windows\\win.ini").is_err());
-    }
-
-    /// Run git in `dir`, isolated from the developer's own config (autocrlf,
-    /// hooks, signing) and with a fixed identity, so tests are deterministic.
-    fn git_in(dir: &Path, args: &[&str]) {
-        let output = Command::new("git")
-            .arg("-C")
-            .arg(dir)
-            .args(args)
-            .env("GIT_CONFIG_GLOBAL", dir.join("no-global-config"))
-            .env("GIT_CONFIG_SYSTEM", dir.join("no-system-config"))
-            .env("GIT_AUTHOR_NAME", "isabuild test")
-            .env("GIT_AUTHOR_EMAIL", "test@example.invalid")
-            .env("GIT_COMMITTER_NAME", "isabuild test")
-            .env("GIT_COMMITTER_EMAIL", "test@example.invalid")
-            .output()
-            .expect("run git");
-        assert!(
-            output.status.success(),
-            "git {args:?} failed: {}",
-            String::from_utf8_lossy(&output.stderr)
-        );
-    }
-
-    /// A repo with one committed file, ready for working-tree edits.
-    fn repo_with_commit(name: &str, content: &str) -> tempfile::TempDir {
-        let dir = tempfile::tempdir().expect("temp dir");
-        git_in(dir.path(), &["init", "--quiet"]);
-        std::fs::write(dir.path().join(name), content).expect("write file");
-        git_in(dir.path(), &["add", name]);
-        git_in(dir.path(), &["commit", "--quiet", "-m", "initial"]);
-        dir
     }
 
     #[test]

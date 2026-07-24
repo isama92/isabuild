@@ -22,7 +22,7 @@ cargo test --manifest-path src-tauri/Cargo.toml   # backend tests
 npm test               # frontend tests (vitest)
 ```
 
-Prerequisites: Rust stable, Node 20+, system `git`, and [Claude Code](https://docs.claude.com/en/docs/claude-code) installed. On Windows, Git for Windows is required.
+Prerequisites: Rust stable, Node 20+, system `git` **2.23 or newer** (branch switching uses `git switch`), and [Claude Code](https://docs.claude.com/en/docs/claude-code) installed. On Windows, Git for Windows is required.
 
 ## Roadmap
 
@@ -40,8 +40,8 @@ Each part is an independent plan (see `plans/`), executed in order. A part is do
 - [x] **Part 4 — Diff viewer** (`plans/PLAN-4-diff-viewer.md`)
   Click a file in the Status panel → its own window, dedicated to the diff: HEAD (short sha) beside the working tree ("Current version"), whole file including unchanged lines, synchronised scrolling, `»` arrows that restore a block from HEAD, an editable right pane that auto-saves, green/blue/red change marks in the scrollbar, and rename/binary/untracked/deleted handling. No options bar yet.
 
-- [ ] **Part 5 — Branch & remote operations**
-  Branch dropdown (switch/create), ahead/behind badges, fetch/pull/push with streamed progress and error dialogs.
+- [x] **Part 5 — Branch & remote operations** (`plans/PLAN-5-branch-remote-operations.md`)
+  GitHub Desktop-style branch management from the status bar's right cluster: current branch, `↑ahead ↓behind` against the upstream, and Fetch / Pull / Push (reading "Publish branch" when there is no upstream). The branch menu opens upward with a filter, locals before remote-only branches, per-row rename/delete, and New branch (name + base). Switching with uncommitted changes asks Bring or Leave; Leave stashes under a marker and returning to that branch restores it with staging intact. Network ops stream git's own progress, can be cancelled, run one at a time, and surface a failure as a modal with git's verbatim output, Copy, and Retry in terminal.
 
 - [ ] **Part 6 — Merge conflicts MVP**
   Merge command, conflict detection, conflicted-file markers, per-conflict Accept ours / theirs / both, resolve → `git add`, merge continue/abort.

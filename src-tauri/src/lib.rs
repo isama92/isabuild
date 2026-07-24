@@ -1,10 +1,16 @@
+pub mod branch;
 mod commands;
 pub mod diff;
 pub mod git;
+pub mod gitops;
 pub mod pty;
+pub mod remote;
 pub mod spawn;
+#[cfg(test)]
+pub mod testrepo;
 pub mod watcher;
 
+use gitops::GitOps;
 use pty::PtyManager;
 use tauri::Manager as _;
 use watcher::GitWatcher;
@@ -19,6 +25,8 @@ pub fn run() {
         .setup(|app| {
             app.manage(PtyManager::default());
             app.manage(GitWatcher::default());
+            // Serialises mutating git operations and backs the Cancel button.
+            app.manage(GitOps::default());
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -30,7 +38,15 @@ pub fn run() {
             commands::git_status,
             commands::git_watch,
             commands::git_file_diff,
-            commands::write_working_file
+            commands::write_working_file,
+            commands::git_branch_state,
+            commands::git_switch_branch,
+            commands::git_create_branch,
+            commands::git_delete_branch,
+            commands::git_rename_branch,
+            commands::git_validate_branch_name,
+            commands::git_remote_op,
+            commands::git_cancel_op
         ])
         .on_window_event(|window, event| {
             // Only the main window owns the PTY sessions. Diff windows

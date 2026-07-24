@@ -21,6 +21,11 @@ interface TerminalViewProps {
    * omitted, the built-in exit/restart overlay is shown instead.
    */
   onExit?: (info: PtyExitInfo) => void;
+  /**
+   * Called once the session is spawned (or re-attached) and wired. Lets a parent
+   * write to the PTY without polling for its existence.
+   */
+  onReady?: () => void;
 }
 
 type Overlay =
@@ -37,17 +42,22 @@ export function TerminalView({
   installHintUrl,
   autoFocus,
   onExit,
+  onReady,
 }: TerminalViewProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const restartButtonRef = useRef<HTMLButtonElement>(null);
   const [overlay, setOverlay] = useState<Overlay>(null);
 
-  // Held in a ref so a changing onExit identity never re-runs the attach
+  // Held in refs so a changing callback identity never re-runs the attach
   // effect (which would detach and respawn the PTY on every parent render).
   const onExitRef = useRef(onExit);
   useEffect(() => {
     onExitRef.current = onExit;
   }, [onExit]);
+  const onReadyRef = useRef(onReady);
+  useEffect(() => {
+    onReadyRef.current = onReady;
+  }, [onReady]);
 
   useEffect(() => {
     if (overlay) restartButtonRef.current?.focus();
@@ -67,6 +77,7 @@ export function TerminalView({
       },
       onError: (error: unknown) =>
         setOverlay({ kind: "error", message: error instanceof Error ? error.message : String(error) }),
+      onReady: () => onReadyRef.current?.(),
     });
     return () => handle.detach();
   }, [sessionId, cmd, autoFocus]);

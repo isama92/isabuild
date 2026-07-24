@@ -3,12 +3,16 @@
 //! with actionable messages for the frontend.
 
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 
-use tauri::{AppHandle, Emitter, State};
+use tauri::{AppHandle, Emitter, Manager as _, State};
 
+use crate::branch::{self, BranchState, DirtyPolicy, SwitchOutcome, SwitchTarget};
 use crate::diff::{self, Eol, FileDiff};
-use crate::git::{self, GitStatus};
+use crate::git::{self, GitError, GitStatus};
+use crate::gitops::GitOps;
 use crate::pty::{PtyEvent, PtyManager, SpawnParams};
+use crate::remote::{self, OpEvent, RemoteOpSpec};
 use crate::spawn::{default_cwd, joined_command, shell_spec};
 use crate::watcher::GitWatcher;
 
@@ -162,6 +166,227 @@ pub async fn write_working_file(
     .await
     .map_err(|e| format!("write task failed: {e}"))?
     .map_err(|e| e.to_string())
+}
+
+// --- Part 5: branch & remote operations ------------------------------------
+
+/// Ids for the operation lock. Branch mutations are not addressable from the
+/// frontend (nothing subscribes to them), so their id is only ever used to hold
+/// and release the slot. Network ops get their id from the caller instead — see
+/// [`git_remote_op`].
+static OP_SEQ: AtomicU64 = AtomicU64::new(0);
+
+fn next_op_id(label: &str) -> String {
+    format!("{label}-{}", OP_SEQ.fetch_add(1, Ordering::Relaxed))
+}
+
+/// Run one mutating git operation on the blocking pool, holding the op lock for
+/// its duration so it cannot interleave with another (a checkout racing a pull,
+/// two switches from a double click).
+async fn with_op_lock<T, F>(ops: &State<'_, GitOps>, label: &str, work: F) -> Result<T, String>
+where
+    F: FnOnce() -> Result<T, GitError> + Send + 'static,
+    T: Send + 'static,
+{
+    let id = next_op_id(label);
+    ops.begin(&id).map_err(|e| e.to_string())?;
+    let result = tauri::async_runtime::spawn_blocking(work).await;
+    // Released whichever way the work went, or the app would wedge on the
+    // first failure.
+    ops.finish(&id);
+    result
+        .map_err(|e| format!("{label} task failed: {e}"))?
+        .map_err(|e| e.to_string())
+}
+
+/// Branch, upstream, ahead/behind and the branch lists, in one round trip.
+/// A read, so it takes no lock — see `git::git_read_command` for why that is
+/// safe while an operation is running.
+#[tauri::command]
+pub async fn git_branch_state(repo_root: String) -> Result<BranchState, String> {
+    tauri::async_runtime::spawn_blocking(move || branch::branch_state(Path::new(&repo_root)))
+        .await
+        .map_err(|e| format!("branch state task failed: {e}"))?
+        .map_err(|e| e.to_string())
+}
+
+/// Switch branch, handling uncommitted changes per `policy` and restoring any
+/// changes previously left on the target. One command, not several, so the
+/// sequence cannot be interrupted midway.
+#[tauri::command]
+pub async fn git_switch_branch(
+    ops: State<'_, GitOps>,
+    repo_root: String,
+    target: SwitchTarget,
+    policy: DirtyPolicy,
+) -> Result<SwitchOutcome, String> {
+    with_op_lock(&ops, "switch", move || {
+        branch::switch(Path::new(&repo_root), &target, policy)
+    })
+    .await
+}
+
+#[tauri::command]
+pub async fn git_create_branch(
+    ops: State<'_, GitOps>,
+    repo_root: String,
+    name: String,
+    base: Option<String>,
+) -> Result<(), String> {
+    with_op_lock(&ops, "create-branch", move || {
+        branch::create(Path::new(&repo_root), &name, base.as_deref())
+    })
+    .await
+}
+
+#[tauri::command]
+pub async fn git_delete_branch(
+    ops: State<'_, GitOps>,
+    repo_root: String,
+    name: String,
+    force: bool,
+) -> Result<(), String> {
+    with_op_lock(&ops, "delete-branch", move || {
+        branch::delete(Path::new(&repo_root), &name, force)
+    })
+    .await
+}
+
+#[tauri::command]
+pub async fn git_rename_branch(
+    ops: State<'_, GitOps>,
+    repo_root: String,
+    from: String,
+    to: String,
+) -> Result<(), String> {
+    with_op_lock(&ops, "rename-branch", move || {
+        branch::rename(Path::new(&repo_root), &from, &to)
+    })
+    .await
+}
+
+/// `None` when `name` is usable as a new branch, `Some(reason)` when it is not.
+/// A rejected name is an answer, not an error, so this does not fail.
+#[tauri::command]
+pub async fn git_validate_branch_name(
+    repo_root: String,
+    name: String,
+) -> Result<Option<String>, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        branch::validate_new_branch_name(Path::new(&repo_root), &name)
+    })
+    .await
+    .map_err(|e| format!("validate branch name task failed: {e}"))?
+    .map_err(|e| e.to_string())
+}
+
+#[derive(serde::Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+struct OpDonePayload {
+    exit_code: i32,
+    /// Everything git said, on both pipes, verbatim. Never parsed.
+    output: String,
+    cancelled: bool,
+}
+
+/// Emit an operation's single terminal event and release the op slot. Called by
+/// whichever side claimed the terminal event — the reader thread normally, the
+/// canceller when the user cancels.
+fn complete_op(app: &AppHandle, id: &str, payload: OpDonePayload) {
+    // Emit failures only happen during webview teardown; ignore.
+    let _ = app.emit(&format!("git://done/{id}"), payload);
+    app.state::<GitOps>().finish(id);
+}
+
+/// Production event sink for a network op. Mirrors [`event_sink`]: per-id event
+/// names, emit failures ignored.
+fn op_event_sink(app: AppHandle) -> impl Fn(OpEvent) + Send + 'static {
+    move |event| match event {
+        OpEvent::Progress { id, line } => {
+            let _ = app.emit(&format!("git://progress/{id}"), line);
+        }
+        OpEvent::Done {
+            id,
+            exit_code,
+            output,
+            cancelled,
+        } => complete_op(
+            &app,
+            &id,
+            OpDonePayload {
+                exit_code,
+                output,
+                cancelled,
+            },
+        ),
+    }
+}
+
+/// Start a fetch, pull or push. Returns as soon as the child is spawned;
+/// progress arrives on `git://progress/<opId>` and the single terminal event on
+/// `git://done/<opId>`.
+///
+/// `op_id` comes from the caller (like `pty_spawn`'s `id`) so the frontend can
+/// subscribe *before* the op starts and cannot miss an early progress line.
+#[tauri::command]
+pub async fn git_remote_op(
+    app: AppHandle,
+    ops: State<'_, GitOps>,
+    repo_root: String,
+    op_id: String,
+    spec: RemoteOpSpec,
+) -> Result<(), String> {
+    let lease = ops.begin(&op_id).map_err(|e| e.to_string())?;
+    let label = spec.kind.as_str();
+    let root = PathBuf::from(repo_root);
+    let sink = op_event_sink(app.clone());
+
+    // Spawning shells out (`git config core.sshCommand`) before it returns, so
+    // it belongs on the blocking pool even though it does not wait for the op.
+    let joined =
+        tauri::async_runtime::spawn_blocking(move || remote::run(&root, &spec, lease, sink)).await;
+
+    // The slot is normally released by whoever emits the terminal event. Both
+    // failure paths below mean nobody ever will, so each releases it itself: a
+    // leaked slot refuses every later fetch, pull, push, switch, create, delete
+    // and rename until the app is restarted.
+    let started = match joined {
+        Ok(result) => result,
+        // The blocking task panicked, or the runtime is shutting down.
+        Err(join_error) => {
+            ops.finish(&op_id);
+            return Err(format!("git {label} task failed: {join_error}"));
+        }
+    };
+    if let Err(error) = started {
+        ops.finish(&op_id);
+        return Err(error.to_string());
+    }
+    Ok(())
+}
+
+/// Cancel a running network op. Emitting the terminal event here (rather than
+/// leaving it to the reader thread) is deliberate: git may have handed its
+/// stderr pipe to an `ssh` child that survives the kill, so the reader can be
+/// stuck on a pipe that never reaches EOF. The UI must not wait for it.
+#[tauri::command]
+pub async fn git_cancel_op(
+    app: AppHandle,
+    ops: State<'_, GitOps>,
+    op_id: String,
+) -> Result<(), String> {
+    if ops.cancel(&op_id) {
+        complete_op(
+            &app,
+            &op_id,
+            OpDonePayload {
+                exit_code: -1,
+                output: String::new(),
+                cancelled: true,
+            },
+        );
+    }
+    Ok(())
 }
 
 /// (Re)start the debounced file watcher on `repo_root`; changes there emit

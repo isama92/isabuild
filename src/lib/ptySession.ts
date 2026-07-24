@@ -29,6 +29,12 @@ export interface AttachOptions {
   onExit?: (info: PtyExitInfo) => void;
   /** Called when spawning or wiring the session fails. */
   onError?: (error: unknown) => void;
+  /**
+   * Called once the session is spawned (or re-attached) and fully wired, so a
+   * caller can write to it without polling `pty_exists`. Not called when the
+   * attach was superseded or failed.
+   */
+  onReady?: () => void;
 }
 
 export interface AttachHandle {
@@ -205,6 +211,19 @@ async function initialize(
   if (opts.autoFocus) {
     e.term.focus();
   }
+  opts.onReady?.();
+}
+
+/**
+ * Type `text` into a live session, as if the user had typed it. Used by
+ * "Retry in terminal" (Part 5); deliberately does not append a newline, so the
+ * user reviews and runs it themselves rather than having a command execute
+ * under them.
+ *
+ * Rejects when no session with `id` is running.
+ */
+export function writeText(id: string, text: string): Promise<void> {
+  return invoke<void>("pty_write", { id, data: stringToBase64(text) });
 }
 
 function teardown(e: Entry): void {

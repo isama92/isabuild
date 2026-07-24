@@ -68,6 +68,11 @@ pub enum GitError {
     CommandFailed(String),
     #[error("failed to run git: {0}")]
     Io(String),
+    /// A request we reject before running git at all (an unusable branch name,
+    /// no remote to sync with). The message is already user-facing, so it is
+    /// rendered without a prefix.
+    #[error("{0}")]
+    Invalid(String),
 }
 
 /// Resolve `start` to the enclosing repository root, then read its status.
@@ -79,7 +84,7 @@ pub fn status_from(start: &Path) -> Result<GitStatus, GitError> {
 /// `git -C <start> rev-parse --show-toplevel`. A non-zero exit means `start`
 /// is not inside a repository (the common, non-exceptional case).
 pub fn resolve_repo_root(start: &Path) -> Result<PathBuf, GitError> {
-    let output = git_command(start)
+    let output = git_read_command(start)
         .args(["rev-parse", "--show-toplevel"])
         .output()
         .map_err(map_io_err)?;
@@ -94,14 +99,12 @@ pub fn resolve_repo_root(start: &Path) -> Result<PathBuf, GitError> {
 
 /// `git -C <root> status --porcelain=v2 -z`, parsed into groups.
 pub fn run_status(root: &Path) -> Result<GitStatus, GitError> {
-    let output = git_command(root)
+    let output = git_read_command(root)
         .args(["status", "--porcelain=v2", "-z"])
         .output()
         .map_err(map_io_err)?;
     if !output.status.success() {
-        return Err(GitError::CommandFailed(
-            String::from_utf8_lossy(&output.stderr).trim().to_string(),
-        ));
+        return Err(GitError::CommandFailed(stderr_of(&output)));
     }
     let (staged, unstaged) = parse_porcelain_v2(&output.stdout);
     Ok(GitStatus {
@@ -123,6 +126,55 @@ pub(crate) fn git_command(dir: &Path) -> Command {
         cmd.creation_flags(CREATE_NO_WINDOW);
     }
     cmd
+}
+
+/// [`git_command`] for read-only queries. `--no-optional-locks` stops git from
+/// taking `index.lock` just to refresh the index, so a watcher-driven read
+/// (which fires *during* a checkout or a pull — see Part 5's op lock) can never
+/// contend with the operation that triggered it.
+pub(crate) fn git_read_command(dir: &Path) -> Command {
+    let mut cmd = git_command(dir);
+    cmd.arg("--no-optional-locks");
+    cmd
+}
+
+/// `git rev-parse --short HEAD`. A non-zero exit means an unborn HEAD (a repo
+/// with no commits yet), which is a normal state, not an error.
+pub fn head_short_sha(root: &Path) -> Result<Option<String>, GitError> {
+    let output = git_read_command(root)
+        .args(["rev-parse", "--short", "HEAD"])
+        .output()
+        .map_err(map_io_err)?;
+    if !output.status.success() {
+        return Ok(None);
+    }
+    Ok(Some(
+        String::from_utf8_lossy(&output.stdout)
+            .trim_end()
+            .to_string(),
+    ))
+}
+
+/// The `stderr` of a finished git process, falling back to `stdout` when git
+/// reported the failure there instead. Trimmed, and never parsed — it is
+/// localized text, only ever shown to the user verbatim.
+pub(crate) fn stderr_of(output: &std::process::Output) -> String {
+    let err = String::from_utf8_lossy(&output.stderr).trim().to_string();
+    if err.is_empty() {
+        String::from_utf8_lossy(&output.stdout).trim().to_string()
+    } else {
+        err
+    }
+}
+
+/// Run a git command that produces no output of interest, mapping a non-zero
+/// exit to [`GitError::CommandFailed`] carrying git's own stderr.
+pub(crate) fn run_checked(mut cmd: Command) -> Result<(), GitError> {
+    let output = cmd.output().map_err(map_io_err)?;
+    if output.status.success() {
+        return Ok(());
+    }
+    Err(GitError::CommandFailed(stderr_of(&output)))
 }
 
 pub(crate) fn map_io_err(e: std::io::Error) -> GitError {
