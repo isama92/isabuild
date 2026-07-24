@@ -9,6 +9,19 @@ const host = process.env.TAURI_DEV_HOST;
 export default defineConfig(async () => ({
   plugins: [react()],
 
+  build: {
+    // Two windows, two documents: the main workspace and the per-file diff
+    // window (Part 4). A separate entry keeps Monaco out of the main bundle
+    // and, more importantly, stops the diff window from mounting the workspace
+    // Layout and spawning PTYs.
+    rollupOptions: {
+      input: {
+        main: "index.html",
+        diff: "diff.html",
+      },
+    },
+  },
+
   test: {
     environment: "jsdom",
     setupFiles: ["./src/test/setup.ts"],

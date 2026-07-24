@@ -6,6 +6,7 @@ use std::path::{Path, PathBuf};
 
 use tauri::{AppHandle, Emitter, State};
 
+use crate::diff::{self, Eol, FileDiff};
 use crate::git::{self, GitStatus};
 use crate::pty::{PtyEvent, PtyManager, SpawnParams};
 use crate::spawn::{default_cwd, joined_command, shell_spec};
@@ -124,6 +125,43 @@ pub async fn git_status(path: Option<String>) -> Result<GitStatus, String> {
         .await
         .map_err(|e| format!("git status task failed: {e}"))?
         .map_err(|e| e.to_string())
+}
+
+/// Both sides of one file's diff: the HEAD revision and the working-tree file.
+/// `orig_path` is the rename/copy origin from `git_status`, when there is one.
+///
+/// Like [`git_status`], the git subprocess and the file read block, so this
+/// runs on the blocking pool.
+#[tauri::command]
+pub async fn git_file_diff(
+    repo_root: String,
+    path: String,
+    orig_path: Option<String>,
+) -> Result<FileDiff, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        diff::file_diff(Path::new(&repo_root), &path, orig_path.as_deref())
+    })
+    .await
+    .map_err(|e| format!("diff task failed: {e}"))?
+    .map_err(|e| e.to_string())
+}
+
+/// Write the diff window's edited buffer back to the working-tree file. The
+/// buffer is LF-separated; `eol` is the file's own ending, returned by
+/// [`git_file_diff`], so a save cannot silently rewrite every line.
+#[tauri::command]
+pub async fn write_working_file(
+    repo_root: String,
+    path: String,
+    content: String,
+    eol: Eol,
+) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        diff::write_worktree_file(Path::new(&repo_root), &path, &content, eol)
+    })
+    .await
+    .map_err(|e| format!("write task failed: {e}"))?
+    .map_err(|e| e.to_string())
 }
 
 /// (Re)start the debounced file watcher on `repo_root`; changes there emit

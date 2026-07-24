@@ -37,8 +37,8 @@ Each part is an independent plan (see `plans/`), executed in order. A part is do
 - [x] **Part 3 — Git status panel**
   Adds the resizable sidebar region and fills it: repo picker, `git status --porcelain=v2 -z` parsing, colored file list (green added, yellow modified, red deleted), debounced file watcher for live refresh.
 
-- [ ] **Part 4 — Diff viewer**
-  Click a file → Monaco diff editor in a main-area tab. HEAD vs working tree, staged/unstaged toggle, rename/binary/untracked handling.
+- [x] **Part 4 — Diff viewer** (`plans/PLAN-4-diff-viewer.md`)
+  Click a file in the Status panel → its own window, dedicated to the diff: HEAD (short sha) beside the working tree ("Current version"), whole file including unchanged lines, synchronised scrolling, `»` arrows that restore a block from HEAD, an editable right pane that auto-saves, green/blue/red change marks in the scrollbar, and rename/binary/untracked/deleted handling. No options bar yet.
 
 - [ ] **Part 5 — Branch & remote operations**
   Branch dropdown (switch/create), ahead/behind badges, fetch/pull/push with streamed progress and error dialogs.

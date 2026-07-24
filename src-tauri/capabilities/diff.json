@@ -1,0 +1,11 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "diff",
+  "description": "Diff windows (one per file, label diff-<hash>): core APIs including events, plus closing themselves. `destroy` is needed as well as `close`: a close with an unsaved edit is intercepted, the edit flushed, and the window then destroyed.",
+  "windows": ["diff-*"],
+  "permissions": [
+    "core:default",
+    "core:window:allow-close",
+    "core:window:allow-destroy"
+  ]
+}

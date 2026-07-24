@@ -113,7 +113,7 @@ pub fn run_status(root: &Path) -> Result<GitStatus, GitError> {
 
 /// A `git` invocation rooted at `dir`, with stdin closed so it can never block
 /// waiting for input. On Windows, `CREATE_NO_WINDOW` stops a console flashing.
-fn git_command(dir: &Path) -> Command {
+pub(crate) fn git_command(dir: &Path) -> Command {
     let mut cmd = Command::new("git");
     cmd.arg("-C").arg(dir).stdin(Stdio::null());
     #[cfg(windows)]
@@ -125,7 +125,7 @@ fn git_command(dir: &Path) -> Command {
     cmd
 }
 
-fn map_io_err(e: std::io::Error) -> GitError {
+pub(crate) fn map_io_err(e: std::io::Error) -> GitError {
     if e.kind() == std::io::ErrorKind::NotFound {
         GitError::GitNotFound
     } else {

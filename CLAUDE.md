@@ -15,7 +15,8 @@ npm run lint                                       # eslint + tsc --noEmit
 
 ## Architecture rules
 
-- **PTY lifecycle**: PTY sessions live in Rust managed state, keyed by string id. The frontend attaches/detaches listeners; it never owns a PTY. Component unmount (including dev HMR) must NOT kill a PTY — re-attach on remount via `pty_exists`. Kill all sessions on window close.
+- **PTY lifecycle**: PTY sessions live in Rust managed state, keyed by string id. The frontend attaches/detaches listeners; it never owns a PTY. Component unmount (including dev HMR) must NOT kill a PTY — re-attach on remount via `pty_exists`. Kill all sessions when the **main** window closes (and on `RunEvent::Exit`), never when a secondary window such as a `diff-*` window closes.
+- **Multiple windows**: the workspace is the `main` window; a diff opens as its own `diff-<hash>` window (one per file, `diff.html` is a second Vite entry so it never mounts the workspace Layout). Any window-scoped behaviour must key off `window.label()`, and a new window label pattern needs its own file in `src-tauri/capabilities/` — `core:window:default` grants getters only, so `close`/`destroy`/`set-focus` must be listed explicitly.
 - **Spawning Claude Code**: always through the user's login shell (`$SHELL -ilc claude` on Unix, Git Bash on Windows) so PATH and shims resolve. Never spawn the `claude` binary directly.
 - **Git**: all operations shell out to the system `git` binary with `cwd` set to the repo root. Only machine-readable formats are parsed (`--porcelain=v2 -z`, `for-each-ref --format`, plumbing commands). Never parse localized human-readable output. Network ops (fetch/pull/push) stream stderr progress as Tauri events and surface full stderr on non-zero exit.
 - **Events over polling**: repo changes come from the `notify` watcher (debounced ~300 ms) emitting `repo://changed`; the frontend re-requests state. No timers polling git.

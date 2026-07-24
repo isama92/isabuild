@@ -23,6 +23,5 @@ portable-pty = "0.9"
 base64 = "0.22"
 thiserror = "2"
 notify-debouncer-mini = "0.7.0"
-
-[dev-dependencies]
+# Atomic saves in `diff`: write a sibling temp file, then rename onto the target.
 tempfile = "3.27.0"

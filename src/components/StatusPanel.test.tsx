@@ -1,12 +1,22 @@
-import { beforeEach, describe, expect, it } from "vitest";
-import { fireEvent, render, screen } from "@testing-library/react";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { StatusPanel } from "./StatusPanel";
 import { initialGitState, useGitStore } from "../store/gitStore";
 import { initialLayoutState, useLayoutStore } from "../store/layoutStore";
+import { openDiffWindow } from "../lib/diffWindow";
+
+vi.mock("../lib/diffWindow", () => ({ openDiffWindow: vi.fn() }));
+
+const openDiffWindowMock = vi.mocked(openDiffWindow);
 
 beforeEach(() => {
   useGitStore.setState(initialGitState);
   useLayoutStore.setState(initialLayoutState);
+  openDiffWindowMock.mockResolvedValue(undefined);
+});
+
+afterEach(() => {
+  vi.clearAllMocks();
 });
 
 describe("StatusPanel", () => {
@@ -62,6 +72,73 @@ describe("StatusPanel", () => {
     });
     render(<StatusPanel />);
     expect(screen.getByText("new.ts").closest("li")).toHaveAttribute("title", "old.ts → new.ts");
+  });
+
+  it("opens the diff window for the clicked file", () => {
+    useGitStore.setState({
+      phase: "ready",
+      repoRoot: "/repo",
+      unstaged: [{ path: "src/b.ts", status: "modified" }],
+    });
+    render(<StatusPanel />);
+
+    fireEvent.click(screen.getByText("b.ts"));
+
+    expect(openDiffWindowMock).toHaveBeenCalledWith({
+      repoRoot: "/repo",
+      path: "src/b.ts",
+      origPath: undefined,
+    });
+  });
+
+  it("passes the rename origin so the HEAD side is read from it", () => {
+    useGitStore.setState({
+      phase: "ready",
+      repoRoot: "/repo",
+      staged: [{ path: "new.ts", origPath: "old.ts", status: "renamed" }],
+    });
+    render(<StatusPanel />);
+
+    fireEvent.click(screen.getByText("new.ts"));
+
+    expect(openDiffWindowMock).toHaveBeenCalledWith({
+      repoRoot: "/repo",
+      path: "new.ts",
+      origPath: "old.ts",
+    });
+  });
+
+  it("opens untracked and deleted files too", () => {
+    useGitStore.setState({
+      phase: "ready",
+      repoRoot: "/repo",
+      unstaged: [
+        { path: "note.txt", status: "untracked" },
+        { path: "gone.ts", status: "deleted" },
+      ],
+    });
+    render(<StatusPanel />);
+
+    fireEvent.click(screen.getByText("note.txt"));
+    fireEvent.click(screen.getByText("gone.ts"));
+
+    expect(openDiffWindowMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("surfaces a failure to open the window", async () => {
+    useGitStore.setState({
+      phase: "ready",
+      repoRoot: "/repo",
+      unstaged: [{ path: "src/b.ts", status: "modified" }],
+    });
+    openDiffWindowMock.mockRejectedValue(new Error("could not open the diff window: denied"));
+    render(<StatusPanel />);
+
+    fireEvent.click(screen.getByText("b.ts"));
+
+    await waitFor(() =>
+      expect(screen.getByRole("alert")).toHaveTextContent(/could not open the diff window/i),
+    );
   });
 
   it("hides the panel when the close button is clicked", () => {

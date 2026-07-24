@@ -1,0 +1,95 @@
+/* Diff window chrome. Deliberately thin: a header row per pane over a
+   full-height editor, and no options/settings bar (a later part adds one).
+   Palette matches App.css so both windows read as one app. */
+
+html,
+body,
+#root {
+  height: 100%;
+  width: 100%;
+  margin: 0;
+  padding: 0;
+  overflow: hidden;
+}
+
+body {
+  background: #1e1e1e;
+}
+
+.diff-window {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+  background: #1e1e1e;
+  color: #cccccc;
+  font: 12px/1 system-ui, sans-serif;
+}
+
+/* The two halves line up with the editor panes: the left one is sized from the
+   live width of Monaco's original editor (DiffPane reports it), so dragging the
+   sash moves the header split with it. */
+.diff-header {
+  flex: 0 0 auto;
+  display: flex;
+  height: 28px;
+  background: #252526;
+  border-bottom: 1px solid #333;
+  user-select: none;
+}
+
+.diff-header-side {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  padding: 0 10px;
+  overflow: hidden;
+}
+
+.diff-header-side--right {
+  flex: 1 1 auto;
+  border-left: 1px solid #333;
+}
+
+.diff-sha {
+  flex: 0 0 auto;
+  font-family: "JetBrains Mono", "Fira Code", Menlo, Consolas, monospace;
+  color: #9cdcfe;
+}
+
+.diff-header-path {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: #cccccc;
+}
+
+.diff-header-note {
+  flex: 0 0 auto;
+  color: #f14c4c;
+}
+
+.diff-body {
+  position: relative;
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
+.diff-editor {
+  height: 100%;
+  width: 100%;
+}
+
+.diff-notice {
+  margin: 0;
+  padding: 10px 12px;
+  color: #9d9d9d;
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.diff-notice--error {
+  color: #f14c4c;
+}

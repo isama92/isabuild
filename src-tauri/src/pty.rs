@@ -585,34 +585,40 @@ mod tests {
         fn output_then_exit_code() {
             let m = manager();
             let (sink, rx) = channel_sink();
-            // ConPTY emits screen *diffs*, so asserting exact output bytes
-            // against a process that is scrolling/exiting is fragile — Server
-            // 2022 conhost intermittently never emits the literal "hello" if it
-            // races the child's teardown, even with a lifetime buffer. So read
-            // the output while the child is ALIVE and holding a stable screen:
-            // `set /p` blocks it on stdin after the echo, giving conhost an
-            // open-ended window to render "hello"; then we send a line to
-            // release it into `exit 3` and still assert the natural exit code.
+            // conhost issues a cursor-position report query (ESC[6n) at startup
+            // and withholds the child's rendered output until the terminal
+            // answers it. In the real app xterm.js answers automatically; this
+            // backend test must do the same, or "hello" is only flushed racily
+            // on teardown (the source of this test's old flakiness on the
+            // Server 2022 runner). The ping keeps the child alive long enough
+            // for conhost to render "hello" once the handshake completes; it
+            // reads no stdin, so our reply can't be mistaken for its input.
             m.spawn(
-                params("t1", "cmd.exe", &["/C", "echo hello& set /p x=& exit 3"]),
+                params(
+                    "t1",
+                    "cmd.exe",
+                    &["/C", "echo hello& ping -n 3 127.0.0.1 >NUL& exit 3"],
+                ),
                 sink,
             )
             .unwrap();
 
-            // Actively wait for "hello" while the child is blocked (not racing
-            // its exit). recv_timeout bounds a genuinely stuck run.
+            // Drain to EOF (reader thread ends when the child exits), replying
+            // to the DSR query the first time we see it. recv_timeout bounds a
+            // genuinely stuck run.
             let mut events = Vec::new();
-            while !decoded_output(&events).contains("hello") {
-                match rx.recv_timeout(Duration::from_secs(10)) {
-                    Ok(ev) => events.push(ev),
+            let mut answered = false;
+            loop {
+                match rx.recv_timeout(Duration::from_secs(15)) {
+                    Ok(ev) => {
+                        events.push(ev);
+                        if !answered && decoded_output(&events).contains("\x1b[6n") {
+                            let _ = m.write("t1", &BASE64.encode("\x1b[1;1R"));
+                            answered = true;
+                        }
+                    }
                     Err(_) => break,
                 }
-            }
-            // Release `set /p` so the child runs on into `exit 3`, then drain to
-            // EOF. Sent regardless so a missing-output run still tears down.
-            let _ = m.write("t1", &BASE64.encode("go\r\n"));
-            while let Ok(ev) = rx.recv_timeout(Duration::from_secs(10)) {
-                events.push(ev);
             }
 
             assert!(
