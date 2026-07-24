@@ -585,26 +585,44 @@ mod tests {
         fn output_then_exit_code() {
             let m = manager();
             let (sink, rx) = channel_sink();
-            // The ping gives the child a ~1s lifetime: older conhost builds
-            // (e.g. Server 2022 CI runners) can lose the output and stall the
-            // teardown of a process that exits within milliseconds. Real
-            // workloads are shells that live for minutes, so this tests the
-            // same exit protocol without racing old-ConPTY teardown bugs.
+            // ConPTY emits screen *diffs*, so asserting exact output bytes
+            // against a process that is scrolling/exiting is fragile — Server
+            // 2022 conhost intermittently never emits the literal "hello" if it
+            // races the child's teardown, even with a lifetime buffer. So read
+            // the output while the child is ALIVE and holding a stable screen:
+            // `set /p` blocks it on stdin after the echo, giving conhost an
+            // open-ended window to render "hello"; then we send a line to
+            // release it into `exit 3` and still assert the natural exit code.
             m.spawn(
-                params(
-                    "t1",
-                    "cmd.exe",
-                    &["/C", "echo hello& ping -n 2 127.0.0.1 >NUL& exit 3"],
-                ),
+                params("t1", "cmd.exe", &["/C", "echo hello& set /p x=& exit 3"]),
                 sink,
             )
             .unwrap();
-            let events = drain(rx);
-            assert!(decoded_output(&events).contains("hello"));
-            assert!(matches!(
-                events.last(),
-                Some(PtyEvent::Exit { exit_code: 3, .. })
-            ));
+
+            // Actively wait for "hello" while the child is blocked (not racing
+            // its exit). recv_timeout bounds a genuinely stuck run.
+            let mut events = Vec::new();
+            while !decoded_output(&events).contains("hello") {
+                match rx.recv_timeout(Duration::from_secs(10)) {
+                    Ok(ev) => events.push(ev),
+                    Err(_) => break,
+                }
+            }
+            // Release `set /p` so the child runs on into `exit 3`, then drain to
+            // EOF. Sent regardless so a missing-output run still tears down.
+            let _ = m.write("t1", &BASE64.encode("go\r\n"));
+            while let Ok(ev) = rx.recv_timeout(Duration::from_secs(10)) {
+                events.push(ev);
+            }
+
+            assert!(
+                decoded_output(&events).contains("hello"),
+                "child output was not delivered: {events:?}"
+            );
+            assert!(
+                matches!(events.last(), Some(PtyEvent::Exit { exit_code: 3, .. })),
+                "expected natural exit with code 3, got {events:?}"
+            );
         }
 
         #[test]
