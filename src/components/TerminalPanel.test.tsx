@@ -42,4 +42,12 @@ describe("TerminalPanel", () => {
     fireEvent.click(screen.getByRole("button", { name: /close terminal/i }));
     expect(useLayoutStore.getState().bottomTerminalVisible).toBe(false);
   });
+
+  it("closes the region when the shell exits", () => {
+    render(<TerminalPanel />);
+    const onExit = hoisted.props.at(-1)!.onExit as (info: { exitCode: number }) => void;
+    expect(typeof onExit).toBe("function");
+    act(() => onExit({ exitCode: 0 }));
+    expect(useLayoutStore.getState().bottomTerminalVisible).toBe(false);
+  });
 });

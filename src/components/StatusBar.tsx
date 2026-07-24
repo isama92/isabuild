@@ -13,7 +13,7 @@ export function StatusBar() {
         className="status-bar-toggle"
         aria-label="Toggle terminal"
         aria-pressed={bottomTerminalVisible}
-        title="Toggle terminal (Ctrl+1)"
+        title="Toggle terminal (Alt+1)"
         onClick={toggleBottomTerminal}
       >
         <span aria-hidden="true">{">_"}</span>

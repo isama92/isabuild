@@ -146,6 +146,11 @@ async function initialize(
     // Re-attached to a live session: sync its size to the current layout.
     await invoke("pty_resize", { id: opts.id, cols: e.term.cols, rows: e.term.rows });
   } else {
+    // Fresh PTY into a possibly-reused terminal (e.g. reopened after the
+    // previous session exited): clear any stale scrollback so the new session
+    // starts clean. Only runs when no live session exists, so it can never
+    // wipe a running terminal.
+    e.term.reset();
     await invoke("pty_spawn", {
       id: opts.id,
       cmd: opts.cmd ?? null,

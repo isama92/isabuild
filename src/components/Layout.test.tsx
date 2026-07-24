@@ -47,10 +47,10 @@ beforeEach(() => {
   useLayoutStore.setState(initialLayoutState);
 });
 
-function pressCtrl1() {
+function pressAlt1() {
   act(() => {
     window.dispatchEvent(
-      new KeyboardEvent("keydown", { ctrlKey: true, code: "Digit1", bubbles: true }),
+      new KeyboardEvent("keydown", { altKey: true, code: "Digit1", bubbles: true }),
     );
   });
 }
@@ -63,13 +63,13 @@ describe("Layout", () => {
     expect(screen.getByTestId("separator")).toBeInTheDocument();
   });
 
-  it("Ctrl+1 hides then reshows the shell terminal; Claude stays mounted", () => {
+  it("Alt+1 hides then reshows the shell terminal; Claude stays mounted", () => {
     render(<Layout />);
-    pressCtrl1();
+    pressAlt1();
     expect(screen.queryByTestId("term-shell-main")).not.toBeInTheDocument();
     expect(screen.queryByTestId("separator")).not.toBeInTheDocument();
     expect(screen.getByTestId("term-claude-main")).toBeInTheDocument();
-    pressCtrl1();
+    pressAlt1();
     expect(screen.getByTestId("term-shell-main")).toBeInTheDocument();
   });
 
@@ -90,8 +90,8 @@ describe("Layout", () => {
     expect(useLayoutStore.getState().bottomTerminalSize).toBe(45);
 
     // Hide then reshow: the terminal Panel remounts seeded with the stored size.
-    pressCtrl1();
-    pressCtrl1();
+    pressAlt1();
+    pressAlt1();
     expect(screen.getByTestId("panel-terminal")).toHaveAttribute("data-default-size", "45%");
   });
 });

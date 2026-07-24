@@ -144,4 +144,12 @@ describe("TerminalView", () => {
     renderShell();
     expect(hoisted.lastOpts!.autoFocus).toBe(true);
   });
+
+  it("delegates to onExit and shows no overlay when onExit is provided", () => {
+    const onExit = vi.fn();
+    render(<TerminalView sessionId="shell-main" label="Terminal" onExit={onExit} />);
+    act(() => hoisted.lastOpts!.onExit!({ exitCode: 0 }));
+    expect(onExit).toHaveBeenCalledWith({ exitCode: 0 });
+    expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument();
+  });
 });

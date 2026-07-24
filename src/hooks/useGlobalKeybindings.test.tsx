@@ -21,27 +21,27 @@ function press(init: KeyboardEventInit) {
 }
 
 describe("useGlobalKeybindings", () => {
-  it("toggles the bottom terminal on Ctrl+1 and swallows the event", () => {
+  it("toggles the bottom terminal on Alt+1 and swallows the event", () => {
     render(<Harness />);
-    const { preventDefault, stopPropagation } = press({ ctrlKey: true, code: "Digit1" });
+    const { preventDefault, stopPropagation } = press({ altKey: true, code: "Digit1" });
     expect(useLayoutStore.getState().bottomTerminalVisible).toBe(false);
     expect(preventDefault).toHaveBeenCalled();
     expect(stopPropagation).toHaveBeenCalled();
   });
 
-  it("ignores 1 without Ctrl, Ctrl+2, Cmd+1 and Ctrl+Shift+1", () => {
+  it("ignores 1 without Alt, Alt+2, Ctrl+1 and Alt+Shift+1", () => {
     render(<Harness />);
     press({ code: "Digit1" }); // no modifier
-    press({ ctrlKey: true, code: "Digit2" }); // unmapped key
-    press({ ctrlKey: true, metaKey: true, code: "Digit1" }); // extra modifier
-    press({ ctrlKey: true, shiftKey: true, code: "Digit1" }); // extra modifier
+    press({ altKey: true, code: "Digit2" }); // unmapped key
+    press({ ctrlKey: true, code: "Digit1" }); // wrong modifier
+    press({ altKey: true, shiftKey: true, code: "Digit1" }); // extra modifier
     expect(useLayoutStore.getState().bottomTerminalVisible).toBe(true);
   });
 
   it("removes the listener on unmount", () => {
     const { unmount } = render(<Harness />);
     unmount();
-    press({ ctrlKey: true, code: "Digit1" });
+    press({ altKey: true, code: "Digit1" });
     expect(useLayoutStore.getState().bottomTerminalVisible).toBe(true);
   });
 });

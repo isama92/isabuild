@@ -15,6 +15,12 @@ interface TerminalViewProps {
   installHintUrl?: string;
   /** Focus the terminal once it is attached. */
   autoFocus?: boolean;
+  /**
+   * Called when the child process exits. When provided, the parent handles
+   * the exit (e.g. closing the region) and no exit overlay is shown; when
+   * omitted, the built-in exit/restart overlay is shown instead.
+   */
+  onExit?: (info: PtyExitInfo) => void;
 }
 
 type Overlay =
@@ -30,10 +36,18 @@ export function TerminalView({
   label = "Claude Code",
   installHintUrl,
   autoFocus,
+  onExit,
 }: TerminalViewProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const restartButtonRef = useRef<HTMLButtonElement>(null);
   const [overlay, setOverlay] = useState<Overlay>(null);
+
+  // Held in a ref so a changing onExit identity never re-runs the attach
+  // effect (which would detach and respawn the PTY on every parent render).
+  const onExitRef = useRef(onExit);
+  useEffect(() => {
+    onExitRef.current = onExit;
+  }, [onExit]);
 
   useEffect(() => {
     if (overlay) restartButtonRef.current?.focus();
@@ -46,7 +60,11 @@ export function TerminalView({
       id: sessionId,
       cmd,
       autoFocus,
-      onExit: (info: PtyExitInfo) => setOverlay({ kind: "exit", exitCode: info.exitCode }),
+      onExit: (info: PtyExitInfo) => {
+        const handler = onExitRef.current;
+        if (handler) handler(info);
+        else setOverlay({ kind: "exit", exitCode: info.exitCode });
+      },
       onError: (error: unknown) =>
         setOverlay({ kind: "error", message: error instanceof Error ? error.message : String(error) }),
     });

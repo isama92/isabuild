@@ -17,14 +17,21 @@ export function TerminalPanel() {
           type="button"
           className="panel-close"
           aria-label="Close terminal"
-          title="Close terminal (Ctrl+1)"
+          title="Close terminal (Alt+1)"
           onClick={() => setBottomTerminalVisible(false)}
         >
           {"×"}
         </button>
       </div>
       <div className="panel-body">
-        <TerminalView sessionId="shell-main" label="Terminal" autoFocus={autoFocus} />
+        {/* When the shell exits, close the region rather than showing a
+            restart overlay — same outcome as the close button. */}
+        <TerminalView
+          sessionId="shell-main"
+          label="Terminal"
+          autoFocus={autoFocus}
+          onExit={() => setBottomTerminalVisible(false)}
+        />
       </div>
     </>
   );
