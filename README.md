@@ -28,7 +28,7 @@ Prerequisites: Rust stable, Node 20+, system `git`, and [Claude Code](https://do
 
 Each part is an independent plan (see `plans/`), executed in order. A part is done only when its acceptance criteria pass on macOS, Linux and Windows. Tick the box when a part is completed.
 
-- [ ] **Part 1 — Claude Code terminal panel** (`plans/PLAN-1-claude-code-panel.md`)
+- [x] **Part 1 — Claude Code terminal panel** (`plans/PLAN-1-claude-code-panel.md`)
   Tauri scaffold + PTY infrastructure + xterm.js terminal running Claude Code. Foundation for every later terminal.
 
 - [ ] **Part 2 — Layout shell + bottom terminal**
