@@ -29,13 +29,22 @@ describe("useGlobalKeybindings", () => {
     expect(stopPropagation).toHaveBeenCalled();
   });
 
-  it("ignores 1 without Alt, Alt+2, Ctrl+1 and Alt+Shift+1", () => {
+  it("toggles the status panel on Alt+2 and swallows the event", () => {
+    render(<Harness />);
+    const { preventDefault, stopPropagation } = press({ altKey: true, code: "Digit2" });
+    expect(useLayoutStore.getState().statusPanelVisible).toBe(false);
+    expect(preventDefault).toHaveBeenCalled();
+    expect(stopPropagation).toHaveBeenCalled();
+  });
+
+  it("ignores 1 without Alt, an unmapped Alt+3, Ctrl+1 and Alt+Shift+1", () => {
     render(<Harness />);
     press({ code: "Digit1" }); // no modifier
-    press({ altKey: true, code: "Digit2" }); // unmapped key
+    press({ altKey: true, code: "Digit3" }); // unmapped key
     press({ ctrlKey: true, code: "Digit1" }); // wrong modifier
     press({ altKey: true, shiftKey: true, code: "Digit1" }); // extra modifier
     expect(useLayoutStore.getState().bottomTerminalVisible).toBe(true);
+    expect(useLayoutStore.getState().statusPanelVisible).toBe(true);
   });
 
   it("removes the listener on unmount", () => {

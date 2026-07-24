@@ -3,8 +3,8 @@ import { useLayoutStore } from "../store/layoutStore";
 
 // Global keyboard shortcuts, registered once at the layout root.
 //
-// Numeric scheme: Alt+<n> toggles a workspace region. Part 2 wires only
-// Alt+1 (the bottom terminal); later parts add Alt+2, Alt+3, ... by
+// Numeric scheme: Alt+<n> toggles a workspace region. Alt+1 toggles the bottom
+// terminal, Alt+2 the right-side Status panel; later parts add Alt+3, ... by
 // extending the `actions` map with more physical-key codes.
 //
 // The listener runs in the CAPTURE phase and stops propagation so the
@@ -13,11 +13,13 @@ import { useLayoutStore } from "../store/layoutStore";
 // would both toggle the panel and write a stray escape sequence into the shell.
 export function useGlobalKeybindings(): void {
   const toggleBottomTerminal = useLayoutStore((state) => state.toggleBottomTerminal);
+  const toggleStatusPanel = useLayoutStore((state) => state.toggleStatusPanel);
 
   useEffect(() => {
     // Keyed by KeyboardEvent.code (physical key, layout-independent).
     const actions: Record<string, () => void> = {
       Digit1: toggleBottomTerminal,
+      Digit2: toggleStatusPanel,
     };
 
     function onKeyDown(event: KeyboardEvent) {
@@ -34,5 +36,5 @@ export function useGlobalKeybindings(): void {
 
     window.addEventListener("keydown", onKeyDown, { capture: true });
     return () => window.removeEventListener("keydown", onKeyDown, { capture: true });
-  }, [toggleBottomTerminal]);
+  }, [toggleBottomTerminal, toggleStatusPanel]);
 }
