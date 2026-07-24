@@ -112,8 +112,18 @@ export function BranchStatus() {
 
   const label = branchLabel(branch);
   const canSync = branch.current !== null && !branch.unborn;
-  const hasUpstream = branch.upstream !== null;
+  // Configured, still present, and actually on a remote. A pruned upstream is
+  // configured but dead, so its counts are meaningless and pulling cannot work;
+  // an upstream that is a local branch is not a remote relationship at all, so
+  // these controls should treat it as unpublished rather than describe it as
+  // living on a remote.
+  const hasUpstream =
+    branch.upstream !== null && !branch.upstreamGone && branch.upstreamOnRemote;
   const remote = branch.remote;
+  // What the "gone" chip and the Pull tooltip say depends on what was lost.
+  const goneDetail = branch.upstreamOnRemote
+    ? `${branch.upstream ?? "The upstream"} no longer exists on the remote. Push to recreate it.`
+    : `${branch.upstream ?? "The upstream"}, the local branch this tracked, no longer exists.`;
   const fetchAge = fetchAgeLabel(branch.lastFetch, fetchNow);
   const fetchTitle = remote
     ? [`Fetch ${remote}`, fetchAge].filter((part) => part !== null).join(" — ")
@@ -148,6 +158,14 @@ export function BranchStatus() {
         </span>
       ) : (
         <>
+          {/* An upstream that was pruned away gets said out loud rather than
+              rendered as a pair of reassuring zeroes. */}
+          {canSync && branch.upstreamGone && (
+            <span className="branch-gone" title={goneDetail}>
+              upstream gone
+            </span>
+          )}
+
           {canSync && hasUpstream && (
             <span
               className="branch-counts"
@@ -176,11 +194,13 @@ export function BranchStatus() {
             className="branch-action"
             aria-label="Pull"
             title={
-              !hasUpstream
-                ? "This branch has no upstream to pull from"
-                : branch.behind === 0
-                  ? "Nothing to pull"
-                  : `Pull ${branch.behind} from ${branch.upstream ?? ""}`
+              branch.upstreamGone
+                ? `${goneDetail} There is nothing to pull.`
+                : !hasUpstream
+                  ? "This branch has no upstream on a remote to pull from"
+                  : branch.behind === 0
+                    ? "Nothing to pull"
+                    : `Pull ${branch.behind} from ${branch.upstream ?? ""}`
             }
             disabled={!canSync || !hasUpstream || branch.behind === 0}
             onClick={() => void store().runOp({ kind: "pull", remote: remote ?? "" })}

@@ -68,6 +68,8 @@ describe("StatusBar", () => {
           detachedSha: null,
           unborn: false,
           upstream: "origin/main",
+          upstreamGone: false,
+          upstreamOnRemote: true,
           remote: "origin",
           ahead: 0,
           behind: 0,

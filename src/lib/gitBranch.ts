@@ -36,6 +36,22 @@ export interface BranchState {
   /** True when HEAD points at a branch that has no commits yet. */
   unborn: boolean;
   upstream: string | null;
+  /**
+   * True when an upstream is configured but its ref no longer exists: the remote
+   * branch was deleted and the tracking ref pruned.
+   *
+   * `upstream` stays populated in that state (it comes from config, not from the
+   * ref), so without this flag `↑0 ↓0` would read as "in sync" for a branch whose
+   * remote copy is gone.
+   */
+  upstreamGone: boolean;
+  /**
+   * True when the upstream really is a remote-tracking branch (its ref is under
+   * `refs/remotes/`). `git branch --track topic main` gives a valid upstream that
+   * is a *local* branch, which the sync controls must not describe as living on a
+   * remote or offer to push.
+   */
+  upstreamOnRemote: boolean;
   /** Remote that fetch/push targets, or null when there is no usable one. */
   remote: string | null;
   ahead: number;
