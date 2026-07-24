@@ -585,8 +585,20 @@ mod tests {
         fn output_then_exit_code() {
             let m = manager();
             let (sink, rx) = channel_sink();
-            m.spawn(params("t1", "cmd.exe", &["/C", "echo hello& exit 3"]), sink)
-                .unwrap();
+            // The ping gives the child a ~1s lifetime: older conhost builds
+            // (e.g. Server 2022 CI runners) can lose the output and stall the
+            // teardown of a process that exits within milliseconds. Real
+            // workloads are shells that live for minutes, so this tests the
+            // same exit protocol without racing old-ConPTY teardown bugs.
+            m.spawn(
+                params(
+                    "t1",
+                    "cmd.exe",
+                    &["/C", "echo hello& ping -n 2 127.0.0.1 >NUL& exit 3"],
+                ),
+                sink,
+            )
+            .unwrap();
             let events = drain(rx);
             assert!(decoded_output(&events).contains("hello"));
             assert!(matches!(
