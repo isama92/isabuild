@@ -29,12 +29,23 @@ export interface LayoutState {
    * remembered across reopens. In-memory only, like `bottomTerminalSize`.
    */
   statusPanelSize: number;
+  /**
+   * A command queued for the bottom shell ("Retry in terminal", Part 5). The
+   * terminal region may not even be mounted when it is queued, so TerminalPanel
+   * consumes it once its PTY is attached rather than the caller writing
+   * directly. Only what is *rendered* lives here; the write itself is
+   * `lib/ptySession`'s job.
+   */
+  pendingShellCommand: string | null;
   toggleBottomTerminal: () => void;
   setBottomTerminalVisible: (visible: boolean) => void;
   setBottomTerminalSize: (size: number) => void;
   toggleStatusPanel: () => void;
   setStatusPanelVisible: (visible: boolean) => void;
   setStatusPanelSize: (size: number) => void;
+  /** Reveal and focus the bottom terminal, and queue `command` for it. */
+  requestShellCommand: (command: string) => void;
+  clearPendingShellCommand: () => void;
 }
 
 /** Data fields only (no actions), so tests can reset via a merge setState. */
@@ -44,6 +55,7 @@ export const initialLayoutState = {
   bottomTerminalAutoFocus: false,
   statusPanelVisible: true,
   statusPanelSize: 22,
+  pendingShellCommand: null as string | null,
 };
 
 export const useLayoutStore = create<LayoutState>((set) => ({
@@ -66,4 +78,12 @@ export const useLayoutStore = create<LayoutState>((set) => ({
   toggleStatusPanel: () => set((state) => ({ statusPanelVisible: !state.statusPanelVisible })),
   setStatusPanelVisible: (visible) => set({ statusPanelVisible: visible }),
   setStatusPanelSize: (size) => set({ statusPanelSize: size }),
+  requestShellCommand: (command) =>
+    set({
+      pendingShellCommand: command,
+      bottomTerminalVisible: true,
+      // An explicit request to run something there: focus is the point.
+      bottomTerminalAutoFocus: true,
+    }),
+  clearPendingShellCommand: () => set({ pendingShellCommand: null }),
 }));

@@ -1,8 +1,9 @@
+import { BranchStatus } from "./BranchStatus";
 import { useLayoutStore } from "../store/layoutStore";
 
 // Thin bar spanning the bottom of the workspace. Its bottom-left cluster hosts
 // the region toggles (terminal + Status panel), each prefixed with its Alt+<n>
-// shortcut number; the right side is left free for later branch/git info.
+// shortcut number; the right side holds the branch and sync controls (Part 5).
 export function StatusBar() {
   const bottomTerminalVisible = useLayoutStore((state) => state.bottomTerminalVisible);
   const toggleBottomTerminal = useLayoutStore((state) => state.toggleBottomTerminal);
@@ -38,6 +39,9 @@ export function StatusBar() {
           </span>
           <span>Status</span>
         </button>
+      </div>
+      <div className="status-bar-right">
+        <BranchStatus />
       </div>
     </div>
   );
