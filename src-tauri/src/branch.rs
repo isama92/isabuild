@@ -35,7 +35,12 @@ use crate::git::{
 const STASH_MARKER: &str = "isabuild:";
 
 /// The `for-each-ref` format: NUL-separated fields, one ref per line.
-const REF_FORMAT: &str = "%(refname)%00%(refname:short)%00%(upstream:short)%00%(committerdate:unix)%00%(objectname:short)";
+///
+/// Both forms of the upstream are read. The short one is what the UI shows; the
+/// full ref is what can be *verified*, and it has to be the full one because an
+/// upstream is not necessarily under `refs/remotes` (`git branch --track` against
+/// a local branch sets `branch.<n>.remote = .`).
+const REF_FORMAT: &str = "%(refname)%00%(refname:short)%00%(upstream:short)%00%(upstream)%00%(committerdate:unix)%00%(objectname:short)";
 
 /// One parsed `for-each-ref` row, before it is sorted into local/remote.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -46,6 +51,10 @@ pub struct RefRow {
     pub short: String,
     /// Configured upstream (locals only), e.g. `origin/main`.
     pub upstream: Option<String>,
+    /// The same upstream as a full ref, e.g. `refs/remotes/origin/main`. Comes
+    /// from `branch.<n>.merge` config, so git still reports it after the ref
+    /// itself has been pruned — which is exactly why it gets verified.
+    pub upstream_ref: Option<String>,
     /// Committer date as a unix timestamp; 0 when unparseable.
     pub committer_date: u64,
     pub head_short: String,
@@ -89,6 +98,22 @@ pub struct BranchState {
     pub unborn: bool,
     /// Upstream of the current branch, e.g. `origin/main`.
     pub upstream: Option<String>,
+    /// True when an upstream is configured but its ref no longer exists — the
+    /// remote branch was deleted and the tracking ref pruned.
+    ///
+    /// Worth its own flag because `upstream` stays populated in that state (it is
+    /// read from config, not from the ref), so without this the UI would report a
+    /// perfectly healthy-looking `↑0 ↓0` for a branch whose remote copy is gone.
+    pub upstream_gone: bool,
+    /// True when the upstream ref lives under `refs/remotes/`, i.e. it really is a
+    /// remote-tracking branch.
+    ///
+    /// `git branch --track topic main` sets `branch.topic.remote = "."`, giving a
+    /// perfectly valid upstream that is a *local* branch. The sync cluster is
+    /// about a remote, so it needs to know the difference: without this it would
+    /// tell the user a missing local branch "no longer exists on the remote" and
+    /// offer to push to recreate it.
+    pub upstream_on_remote: bool,
     /// Remote that fetch/push would target, resolved from the upstream or
     /// falling back (see [`resolve_remote`]). `None` when there is no usable one.
     pub remote: Option<String>,
@@ -156,6 +181,7 @@ fn parse_ref_row(line: &str) -> Option<RefRow> {
     let refname = fields.next()?;
     let short = fields.next()?;
     let upstream = fields.next()?;
+    let upstream_ref = fields.next()?;
     let date = fields.next()?;
     let head_short = fields.next()?;
     // `refs/remotes/<remote>/HEAD` is a symbolic ref, not a branch, and its
@@ -170,6 +196,7 @@ fn parse_ref_row(line: &str) -> Option<RefRow> {
         refname: refname.to_string(),
         short: short.to_string(),
         upstream: (!upstream.is_empty()).then(|| upstream.to_string()),
+        upstream_ref: (!upstream_ref.is_empty()).then(|| upstream_ref.to_string()),
         committer_date: date.parse().unwrap_or(0),
         head_short: head_short.to_string(),
     })
@@ -322,15 +349,33 @@ pub fn branch_state(root: &Path) -> Result<BranchState, GitError> {
     let (locals, remote_branches) = dedupe_remotes(&rows, &remotes);
     let head = read_head(root)?;
 
-    let upstream = head.branch.as_deref().and_then(|branch| {
-        locals
-            .iter()
-            .find(|l| l.name == branch)
-            .and_then(|l| l.upstream.clone())
+    // Taken from the raw row rather than the serialized LocalBranch, because the
+    // full upstream ref is needed for verification and is not part of the
+    // frontend's payload.
+    let current_row = head.branch.as_deref().and_then(|branch| {
+        let refname = format!("refs/heads/{branch}");
+        rows.iter().find(|row| row.refname == refname)
     });
+    let upstream = current_row.and_then(|row| row.upstream.clone());
+
+    // An upstream whose ref has been deleted (the remote branch was removed and
+    // the tracking ref pruned) still shows up in `%(upstream)`, since that comes
+    // from config. `%(upstream:track)` would say `[gone]`, but that is prose, so
+    // the ref is verified directly instead.
+    let upstream_ref = current_row.and_then(|row| row.upstream_ref.clone());
+    let upstream_gone = match upstream_ref.as_deref() {
+        Some(reff) => !upstream_ref_exists(root, reff, &rows)?,
+        None => false,
+    };
+    let upstream_on_remote = upstream_ref
+        .as_deref()
+        .is_some_and(|reff| reff.starts_with("refs/remotes/"));
+
+    // Counting against a ref that does not exist would only fail; the flag above
+    // is what the UI reports instead of a misleading 0/0.
     let (ahead, behind) = match upstream.as_deref() {
-        Some(up) => count_ahead_behind(root, up)?,
-        None => (0, 0),
+        Some(up) if !upstream_gone => count_ahead_behind(root, up)?,
+        _ => (0, 0),
     };
 
     Ok(BranchState {
@@ -341,6 +386,8 @@ pub fn branch_state(root: &Path) -> Result<BranchState, GitError> {
         // "no remote" rather than refusing to render the branch at all.
         remote: resolve_remote(upstream.as_deref(), &remotes).ok(),
         upstream,
+        upstream_gone,
+        upstream_on_remote,
         ahead,
         behind,
         last_fetch: last_fetch_time(root),
@@ -569,13 +616,33 @@ pub fn validate_new_branch_name(root: &Path, name: &str) -> Result<Option<String
     Ok(None)
 }
 
-fn branch_exists(root: &Path, name: &str) -> Result<bool, GitError> {
-    let refname = format!("refs/heads/{name}");
+/// Whether an upstream ref resolves, avoiding a process spawn where it can.
+///
+/// `rows` already lists every ref under `refs/heads` and `refs/remotes`, so a hit
+/// there settles it for free — and this runs on every watcher-driven refresh, where
+/// a spawn is not free on Windows. A *miss* proves nothing though: `rows` covers
+/// only those two namespaces (a custom refspec can put tracking refs under
+/// `refs/tracked/*`) and drops `refs/remotes/*/HEAD`, so the rare case falls back
+/// to asking git rather than reporting a false "gone".
+fn upstream_ref_exists(root: &Path, upstream_ref: &str, rows: &[RefRow]) -> Result<bool, GitError> {
+    if rows.iter().any(|row| row.refname == upstream_ref) {
+        return Ok(true);
+    }
+    ref_exists(root, upstream_ref)
+}
+
+/// Whether `refname` resolves. A missing ref is a normal answer here, not an
+/// error, which is why `--quiet` plus the exit code is the whole test.
+fn ref_exists(root: &Path, refname: &str) -> Result<bool, GitError> {
     let output = git_read_command(root)
-        .args(["rev-parse", "--verify", "--quiet", &refname])
+        .args(["rev-parse", "--verify", "--quiet", refname])
         .output()
         .map_err(map_io_err)?;
     Ok(output.status.success())
+}
+
+fn branch_exists(root: &Path, name: &str) -> Result<bool, GitError> {
+    ref_exists(root, &format!("refs/heads/{name}"))
 }
 
 /// Undo the `Leave` stash after the switch it was taken for failed, folding what
@@ -654,12 +721,33 @@ mod tests {
     use super::*;
 
     /// Build `for-each-ref` output from (refname, short, upstream, date, sha).
+    ///
+    /// The full upstream ref is derived as `refs/remotes/<upstream>`, which is
+    /// what git reports for an ordinary remote-tracking upstream. Tests that need
+    /// a different one (a local-branch upstream) use [`refs_with_upstream_ref`].
     fn refs(rows: &[(&str, &str, &str, &str, &str)]) -> Vec<u8> {
         let mut out = String::new();
         for (refname, short, upstream, date, sha) in rows {
-            out.push_str(&format!("{refname}\0{short}\0{upstream}\0{date}\0{sha}\n"));
+            let upstream_ref = if upstream.is_empty() {
+                String::new()
+            } else {
+                format!("refs/remotes/{upstream}")
+            };
+            out.push_str(&format!(
+                "{refname}\0{short}\0{upstream}\0{upstream_ref}\0{date}\0{sha}\n"
+            ));
         }
         out.into_bytes()
+    }
+
+    /// As [`refs`], but with the full upstream ref given explicitly.
+    fn refs_with_upstream_ref(
+        refname: &str,
+        short: &str,
+        upstream: &str,
+        upstream_ref: &str,
+    ) -> Vec<u8> {
+        format!("{refname}\0{short}\0{upstream}\0{upstream_ref}\0100\0abc1234\n").into_bytes()
     }
 
     fn origin() -> Vec<String> {
@@ -697,8 +785,28 @@ mod tests {
         assert_eq!(rows[0].upstream.as_deref(), Some("origin/main"));
         assert_eq!(rows[0].committer_date, 1_700_000_000);
         assert_eq!(rows[0].head_short, "abc1234");
-        // An empty upstream field must become None, not Some("").
+        assert_eq!(
+            rows[0].upstream_ref.as_deref(),
+            Some("refs/remotes/origin/main")
+        );
+        // Empty upstream fields must become None, not Some("").
         assert_eq!(rows[1].upstream, None);
+        assert_eq!(rows[1].upstream_ref, None);
+    }
+
+    #[test]
+    fn a_local_branch_upstream_keeps_its_own_full_ref() {
+        // `git branch --track x main` sets branch.x.remote = "." and an upstream
+        // under refs/heads, so the full ref cannot be assumed to live under
+        // refs/remotes — which is why it is read rather than reconstructed.
+        let rows = parse_for_each_ref(&refs_with_upstream_ref(
+            "refs/heads/topic",
+            "topic",
+            "main",
+            "refs/heads/main",
+        ));
+        assert_eq!(rows[0].upstream.as_deref(), Some("main"));
+        assert_eq!(rows[0].upstream_ref.as_deref(), Some("refs/heads/main"));
     }
 
     #[test]
@@ -767,7 +875,8 @@ mod tests {
         // A truncated record (too few fields) is skipped entirely.
         let mut bytes = b"refs/heads/main\0main\n".to_vec();
         // A non-numeric date falls back to 0 rather than dropping the branch.
-        bytes.extend_from_slice(b"refs/heads/other\0other\0\0nonsense\0abc1234\n");
+        // Fields: refname, short, upstream, upstream ref, date, sha.
+        bytes.extend_from_slice(b"refs/heads/other\0other\0\0\0nonsense\0abc1234\n");
         let rows = parse_for_each_ref(&bytes);
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0].short, "other");
@@ -781,9 +890,9 @@ mod tests {
         bytes.push(0xFF);
         bytes.extend_from_slice(b"\0caf");
         bytes.push(0xFF);
-        // Empty upstream, then the date — written in pieces because "\0" next
-        // to a digit reads as an attempted octal escape.
-        bytes.extend_from_slice(b"\0\0");
+        // Empty upstream and upstream ref, then the date — written in pieces
+        // because "\0" next to a digit reads as an attempted octal escape.
+        bytes.extend_from_slice(b"\0\0\0");
         bytes.extend_from_slice(b"1700000000\0abc1234\n");
         let rows = parse_for_each_ref(&bytes);
         assert_eq!(rows.len(), 1);
@@ -1018,16 +1127,62 @@ mod repo_tests {
     }
 
     #[test]
-    fn a_deleted_upstream_ref_reports_zeroes_rather_than_failing() {
+    fn a_deleted_upstream_ref_is_reported_as_gone_not_as_in_sync() {
         let dir = repo_with_bare_remote();
-        // Leave branch.main.merge pointing at a remote-tracking ref that is gone.
+        // Leave branch.main.merge pointing at a remote-tracking ref that is gone,
+        // which is the state a prune leaves once the remote branch is deleted.
         git_in(
             dir.path(),
             &["update-ref", "-d", "refs/remotes/origin/main"],
         );
         let state = branch_state(dir.path()).expect("state must still be readable");
-        assert_eq!((state.ahead, state.behind), (0, 0));
+        // The upstream is still configured, so it is still reported...
         assert_eq!(state.upstream.as_deref(), Some("origin/main"));
+        // ...but it has to say the ref is gone, or `↑0 ↓0` reads as "in sync" for
+        // a branch whose remote copy no longer exists.
+        assert!(state.upstream_gone);
+        assert_eq!((state.ahead, state.behind), (0, 0));
+    }
+
+    #[test]
+    fn a_healthy_upstream_is_not_reported_as_gone() {
+        let dir = repo_with_bare_remote();
+        let state = branch_state(dir.path()).expect("state");
+        assert_eq!(state.upstream.as_deref(), Some("origin/main"));
+        assert!(!state.upstream_gone);
+        assert!(state.upstream_on_remote);
+    }
+
+    #[test]
+    fn a_local_branch_upstream_is_detected_but_not_called_a_remote_one() {
+        // `--track` against a local branch is a valid, if unusual, setup. Telling
+        // the user a missing *local* branch "no longer exists on the remote", and
+        // offering to push to recreate it, would be wrong on both counts.
+        let dir = repo_with_commit("file.txt", "one\n");
+        git_in(dir.path(), &["branch", "--track", "topic", "main"]);
+        git_in(dir.path(), &["switch", "--quiet", "topic"]);
+
+        let state = branch_state(dir.path()).expect("state");
+        assert_eq!(state.upstream.as_deref(), Some("main"));
+        assert!(!state.upstream_on_remote, "the upstream is a local branch");
+        assert!(!state.upstream_gone, "and it still exists");
+
+        // Now delete what it tracked: gone, but still not a remote upstream.
+        git_in(dir.path(), &["branch", "-D", "main"]);
+        let state = branch_state(dir.path()).expect("state");
+        assert!(state.upstream_gone);
+        assert!(!state.upstream_on_remote);
+    }
+
+    #[test]
+    fn a_branch_with_no_upstream_is_not_reported_as_gone() {
+        let dir = repo_with_commit("file.txt", "one\n");
+        let state = branch_state(dir.path()).expect("state");
+        assert_eq!(state.upstream, None);
+        assert!(
+            !state.upstream_gone,
+            "having no upstream is not the same as having a missing one"
+        );
     }
 
     #[test]

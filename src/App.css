@@ -376,6 +376,17 @@ body {
   font-size: 11px;
 }
 
+/* Stands in for the counts when the upstream ref has been pruned away. Orange
+   rather than red: the branch is fine, only its remote copy is missing. */
+.branch-gone {
+  padding: 0 4px;
+  color: #e08f4c;
+  font: 12px/1 system-ui, sans-serif;
+  /* This chip renders alongside "Publish", which is the widest the cluster ever
+     gets; without nowrap the two words break inside a 24px bar and get clipped. */
+  white-space: nowrap;
+}
+
 .branch-action,
 .branch-current,
 .branch-notice {

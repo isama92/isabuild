@@ -89,7 +89,7 @@ pub enum OpEvent {
 ///
 /// `pull` is deliberately bare: no `--ff-only`, no `--rebase`, so the user's own
 /// `pull.rebase`/`pull.ff` config and hooks decide what happens.
-pub fn op_args(spec: &RemoteOpSpec) -> Result<Vec<String>, GitError> {
+pub fn op_args(spec: &RemoteOpSpec, prune: bool) -> Result<Vec<String>, GitError> {
     if spec.remote.is_empty() || spec.remote.starts_with('-') {
         return Err(GitError::Invalid(format!(
             "'{}' is not a usable remote name",
@@ -98,7 +98,28 @@ pub fn op_args(spec: &RemoteOpSpec) -> Result<Vec<String>, GitError> {
     }
     let mut args = vec![spec.kind.as_str().to_string(), "--progress".to_string()];
     match spec.kind {
-        RemoteOpKind::Fetch => args.push(spec.remote.clone()),
+        RemoteOpKind::Fetch => {
+            // Pruning is what stops a branch someone else deleted from keeping its
+            // tracking ref forever and going on appearing in the branch menu,
+            // offering a checkout of something that no longer exists.
+            //
+            // `--prune` rather than a separate `git remote prune`, because that
+            // command is itself a network round trip: doing it first would cost
+            // two connections and two auth handshakes for one refresh.
+            //
+            // Deliberately ignores `fetch.prune=false` — but only when
+            // [`prune_is_confined_to_tracking_refs`] says the remote's refspecs
+            // cannot reach anything else. Someone who set that config set it for
+            // `git fetch` on the command line, not for a button whose whole
+            // meaning is "make my view of the remote accurate"; overriding it is
+            // the intended behaviour, not an oversight. What must never be
+            // overridden is a refspec under which pruning would delete the user's
+            // own tags or notes, which is a real thing `--prune` does.
+            if prune {
+                args.push("--prune".to_string());
+            }
+            args.push(spec.remote.clone());
+        }
         // Bare pull: the branch's upstream and the user's config decide.
         RemoteOpKind::Pull => {}
         RemoteOpKind::Push => {
@@ -118,13 +139,67 @@ pub fn op_args(spec: &RemoteOpSpec) -> Result<Vec<String>, GitError> {
     Ok(args)
 }
 
+/// The destination half of a fetch refspec — the part after the colon — or `None`
+/// for a refspec that has no destination (it fetches into `FETCH_HEAD` only, and
+/// pruning ignores it).
+///
+/// Splitting on the first colon is unambiguous because `git check-ref-format`
+/// forbids a colon inside a ref name, so there can never be a second one.
+fn refspec_destination(refspec: &str) -> Option<&str> {
+    let spec = refspec.strip_prefix('+').unwrap_or(refspec);
+    spec.split_once(':').map(|(_, destination)| destination)
+}
+
+/// Whether pruning this remote could only ever delete remote-tracking refs.
+///
+/// **This is the load-bearing safety check for `--prune`.** Pruning deletes stale
+/// refs at *every destination the remote's refspecs cover*, and
+/// `remote.<n>.fetch` is user-editable. With `+refs/tags/*:refs/tags/*`
+/// configured (what `git remote add --mirror=fetch` sets up) a prune deletes the
+/// user's local-only tags; with `+refs/notes/*:refs/notes/*` — the documented way
+/// to share notes — it deletes `refs/notes/commits` and with it the note content.
+/// Both verified against real repos, and in both cases `fetch.prune=false` is the
+/// only thing standing in the way, which is exactly what we otherwise override.
+///
+/// So the override is scoped: force `--prune` only where every destination lives
+/// under `refs/remotes/`, which is every ordinary clone. Anything more exotic
+/// keeps the user's own configuration and its protection.
+///
+/// No refspecs at all means no remote-tracking refs exist, so there is nothing to
+/// prune and nothing to gain by forcing it.
+fn prune_is_confined_to_tracking_refs(root: &Path, remote: &str) -> bool {
+    let key = format!("remote.{remote}.fetch");
+    let output = crate::git::git_read_command(root)
+        .args(["config", "--get-all", &key])
+        .output();
+    let Ok(output) = output else { return false };
+    if !output.status.success() {
+        return false;
+    }
+    let text = String::from_utf8_lossy(&output.stdout);
+    let mut saw_destination = false;
+    for refspec in text.lines().map(str::trim).filter(|l| !l.is_empty()) {
+        // A refspec with no destination fetches into FETCH_HEAD and is never
+        // pruned, so it neither helps nor hurts.
+        if let Some(destination) = refspec_destination(refspec) {
+            saw_destination = true;
+            if !destination.starts_with("refs/remotes/") {
+                return false;
+            }
+        }
+    }
+    saw_destination
+}
+
 /// Start `spec` in the background. Returns as soon as the child is spawned;
 /// everything else arrives on `sink`.
 pub fn run<F>(root: &Path, spec: &RemoteOpSpec, lease: OpLease, sink: F) -> Result<(), GitError>
 where
     F: Fn(OpEvent) + Send + 'static,
 {
-    let args = op_args(spec)?;
+    let prune =
+        spec.kind == RemoteOpKind::Fetch && prune_is_confined_to_tracking_refs(root, &spec.remote);
+    let args = op_args(spec, prune)?;
     let mut cmd = git_command(root);
     cmd.args(&args);
     apply_network_env(&mut cmd, root);
@@ -382,23 +457,73 @@ mod tests {
     // --- op_args ----------------------------------------------------------
 
     #[test]
-    fn fetch_names_the_remote_and_forces_progress() {
-        let args = op_args(&spec(RemoteOpKind::Fetch, None, false)).unwrap();
+    fn fetch_names_the_remote_and_forces_progress_and_prunes() {
+        let args = op_args(&spec(RemoteOpKind::Fetch, None, false), true).unwrap();
+        assert_eq!(args, ["fetch", "--progress", "--prune", "origin"]);
+    }
+
+    #[test]
+    fn fetch_omits_prune_when_it_would_reach_beyond_tracking_refs() {
+        let args = op_args(&spec(RemoteOpKind::Fetch, None, false), false).unwrap();
         assert_eq!(args, ["fetch", "--progress", "origin"]);
+    }
+
+    #[test]
+    fn only_fetch_prunes() {
+        // Pull stays bare so the user's own pull.rebase/pull.ff decide, and a
+        // push has nothing to prune. Neither may prune even when asked to.
+        for kind in [RemoteOpKind::Pull, RemoteOpKind::Push] {
+            let args = op_args(&spec(kind, Some("main"), false), true).unwrap();
+            assert!(
+                !args.contains(&"--prune".to_string()),
+                "{kind:?} must not prune"
+            );
+        }
+    }
+
+    // --- refspec_destination ----------------------------------------------
+
+    #[test]
+    fn refspec_destination_is_the_half_after_the_colon() {
+        assert_eq!(
+            refspec_destination("+refs/heads/*:refs/remotes/origin/*"),
+            Some("refs/remotes/origin/*")
+        );
+        // The leading + is optional.
+        assert_eq!(
+            refspec_destination("refs/heads/*:refs/remotes/origin/*"),
+            Some("refs/remotes/origin/*")
+        );
+        // The two that make pruning dangerous.
+        assert_eq!(
+            refspec_destination("+refs/tags/*:refs/tags/*"),
+            Some("refs/tags/*")
+        );
+        assert_eq!(
+            refspec_destination("+refs/notes/*:refs/notes/*"),
+            Some("refs/notes/*")
+        );
+    }
+
+    #[test]
+    fn a_refspec_with_no_destination_has_none() {
+        // Fetches into FETCH_HEAD only, which pruning never touches.
+        assert_eq!(refspec_destination("refs/heads/main"), None);
+        assert_eq!(refspec_destination("+refs/heads/main"), None);
     }
 
     #[test]
     fn pull_stays_bare_so_the_users_config_decides() {
         // No --ff-only and no --rebase: pull.rebase / pull.ff are the user's.
-        let args = op_args(&spec(RemoteOpKind::Pull, Some("main"), false)).unwrap();
+        let args = op_args(&spec(RemoteOpKind::Pull, Some("main"), false), false).unwrap();
         assert_eq!(args, ["pull", "--progress"]);
     }
 
     #[test]
     fn push_names_remote_and_branch_and_publishes_with_set_upstream() {
-        let args = op_args(&spec(RemoteOpKind::Push, Some("main"), false)).unwrap();
+        let args = op_args(&spec(RemoteOpKind::Push, Some("main"), false), false).unwrap();
         assert_eq!(args, ["push", "--progress", "origin", "main"]);
-        let published = op_args(&spec(RemoteOpKind::Push, Some("main"), true)).unwrap();
+        let published = op_args(&spec(RemoteOpKind::Push, Some("main"), true), false).unwrap();
         assert_eq!(
             published,
             ["push", "--progress", "--set-upstream", "origin", "main"]
@@ -407,12 +532,12 @@ mod tests {
 
     #[test]
     fn option_like_and_missing_names_are_refused_before_git_runs() {
-        assert!(op_args(&spec(RemoteOpKind::Push, None, false)).is_err());
-        assert!(op_args(&spec(RemoteOpKind::Push, Some(""), false)).is_err());
-        assert!(op_args(&spec(RemoteOpKind::Push, Some("--force"), false)).is_err());
+        assert!(op_args(&spec(RemoteOpKind::Push, None, false), false).is_err());
+        assert!(op_args(&spec(RemoteOpKind::Push, Some(""), false), false).is_err());
+        assert!(op_args(&spec(RemoteOpKind::Push, Some("--force"), false), false).is_err());
         let mut bad_remote = spec(RemoteOpKind::Fetch, None, false);
         bad_remote.remote = "--upload-pack=evil".to_string();
-        assert!(op_args(&bad_remote).is_err());
+        assert!(op_args(&bad_remote, false).is_err());
     }
 
     // --- split_progress_chunks --------------------------------------------
@@ -655,6 +780,123 @@ mod repo_tests {
 
         let after = crate::branch::branch_state(dir.path()).expect("state");
         assert_eq!(after.upstream.as_deref(), Some("origin/fresh"));
+    }
+
+    #[test]
+    fn fetch_prunes_a_branch_deleted_on_the_remote_without_touching_local_work() {
+        let dir = repo_with_bare_remote();
+        // A branch we track, which someone else then deletes on the remote — what
+        // GitHub's "delete branch after merge" does to you. Deleting it through
+        // `push --delete` would not reproduce this: that also drops our local
+        // tracking ref, so the stale state never arises.
+        crate::branch::create(dir.path(), "feature", None).expect("create");
+        write(dir.path(), "only-here.txt", "work\n");
+        commit_all(dir.path(), "work on feature");
+        git_in(dir.path(), &["push", "--quiet", "-u", "origin", "feature"]);
+        git_in(
+            &bare_remote_path(dir.path()),
+            &["update-ref", "-d", "refs/heads/feature"],
+        );
+
+        let before = crate::branch::branch_state(dir.path()).expect("state");
+        assert!(
+            before.remotes.iter().any(|r| r.branch == "feature"),
+            "the dead tracking ref should still be listed before the fetch"
+        );
+
+        let finished = run_op(dir.path(), &spec_for(RemoteOpKind::Fetch, "feature", false));
+        assert_eq!(finished.exit_code, 0, "output was: {}", finished.output);
+
+        let after = crate::branch::branch_state(dir.path()).expect("state");
+        assert!(
+            after.remotes.iter().all(|r| r.branch != "feature"),
+            "the pruned branch must be gone from the menu, got: {:?}",
+            after.remotes.iter().map(|r| &r.name).collect::<Vec<_>>()
+        );
+
+        // Pruning touches refs/remotes only. The local branch, its commit and the
+        // file it added all survive; the upstream is merely reported as gone.
+        assert_eq!(crate::testrepo::current_branch(dir.path()), "feature");
+        assert_eq!(crate::testrepo::read(dir.path(), "only-here.txt"), "work\n");
+        assert!(after.locals.iter().any(|l| l.name == "feature"));
+        assert!(after.upstream_gone, "the upstream ref is what was pruned");
+    }
+
+    #[test]
+    fn a_tags_refspec_stops_the_forced_prune_and_local_tags_survive() {
+        // The reason the prune override is gated. `--prune` deletes stale refs at
+        // every destination the refspecs cover, so with a tags refspec configured
+        // it deletes the user's local-only tags — verified against real git. The
+        // only thing that would otherwise protect them is `fetch.prune=false`,
+        // which is precisely what the override ignores.
+        let dir = repo_with_bare_remote();
+        git_in(
+            dir.path(),
+            &[
+                "config",
+                "--add",
+                "remote.origin.fetch",
+                "+refs/tags/*:refs/tags/*",
+            ],
+        );
+        git_in(dir.path(), &["tag", "local-only-tag"]);
+        assert!(!prune_is_confined_to_tracking_refs(dir.path(), "origin"));
+
+        let finished = run_op(dir.path(), &spec_for(RemoteOpKind::Fetch, "main", false));
+        assert_eq!(finished.exit_code, 0, "output was: {}", finished.output);
+
+        let tags = git_raw(dir.path(), &["tag", "--list"]);
+        assert!(
+            String::from_utf8_lossy(&tags.stdout).contains("local-only-tag"),
+            "the fetch must not have deleted the user's local tag"
+        );
+    }
+
+    #[test]
+    fn a_notes_refspec_also_stops_the_forced_prune() {
+        // Same hazard: pruning would delete refs/notes/commits, and with it the
+        // note content, not merely a pointer.
+        let dir = repo_with_bare_remote();
+        git_in(
+            dir.path(),
+            &[
+                "config",
+                "--add",
+                "remote.origin.fetch",
+                "+refs/notes/*:refs/notes/*",
+            ],
+        );
+        assert!(!prune_is_confined_to_tracking_refs(dir.path(), "origin"));
+    }
+
+    #[test]
+    fn a_default_clone_refspec_is_safe_to_prune() {
+        let dir = repo_with_bare_remote();
+        assert!(
+            prune_is_confined_to_tracking_refs(dir.path(), "origin"),
+            "the ordinary case must still prune, config or not"
+        );
+    }
+
+    #[test]
+    fn a_remote_with_no_refspec_at_all_is_not_pruned() {
+        // No refspec means no remote-tracking refs exist, so there is nothing to
+        // prune and nothing to gain by forcing it.
+        let dir = repo_with_bare_remote();
+        git_in(
+            dir.path(),
+            &["config", "--unset-all", "remote.origin.fetch"],
+        );
+        assert!(!prune_is_confined_to_tracking_refs(dir.path(), "origin"));
+    }
+
+    #[test]
+    fn an_unknown_remote_is_not_pruned() {
+        let dir = repo_with_bare_remote();
+        assert!(!prune_is_confined_to_tracking_refs(
+            dir.path(),
+            "no-such-remote"
+        ));
     }
 
     #[test]

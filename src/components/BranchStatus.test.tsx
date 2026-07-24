@@ -20,6 +20,8 @@ function branchState(overrides: Partial<BranchState> = {}): BranchState {
     detachedSha: null,
     unborn: false,
     upstream: "origin/main",
+    upstreamGone: false,
+    upstreamOnRemote: true,
     remote: "origin",
     ahead: 0,
     behind: 0,
@@ -185,6 +187,70 @@ describe("BranchStatus sync controls", () => {
       branch: "main",
       setUpstream: false,
     });
+  });
+
+  it("says the upstream is gone instead of showing a reassuring zero", () => {
+    // A pruned upstream is still *configured*, so ahead/behind come back 0/0.
+    // Rendering that as ↑0 ↓0 would read as "in sync" for a branch whose remote
+    // copy has been deleted.
+    setup({ upstreamGone: true, ahead: 0, behind: 0 });
+    expect(screen.getByText("upstream gone")).toBeInTheDocument();
+    expect(screen.queryByText("↑0")).not.toBeInTheDocument();
+    expect(screen.queryByText("↓0")).not.toBeInTheDocument();
+  });
+
+  it("disables pull and explains why when the upstream is gone", () => {
+    setup({ upstreamGone: true, behind: 3 });
+    const pull = screen.getByRole("button", { name: "Pull" });
+    expect(pull).toBeDisabled();
+    expect(pull.getAttribute("title")).toMatch(/no longer exists on the remote/);
+  });
+
+  it("offers to publish again when the upstream is gone, recreating it", () => {
+    // The branch really is not on the remote any more, so "Publish" is the
+    // honest label, and pushing recreates it.
+    const { runOp } = setup({ upstreamGone: true, ahead: 0 });
+    const publish = screen.getByRole("button", { name: "Publish branch" });
+    expect(publish).toBeEnabled();
+    fireEvent.click(publish);
+    expect(runOp).toHaveBeenCalledWith({
+      kind: "push",
+      remote: "origin",
+      branch: "main",
+      setUpstream: true,
+    });
+  });
+
+  it("still allows a fetch when the upstream is gone", () => {
+    // Fetch is how you would discover the branch is back, so it must stay live.
+    const { runOp } = setup({ upstreamGone: true });
+    fireEvent.click(screen.getByRole("button", { name: "Fetch" }));
+    expect(runOp).toHaveBeenCalledWith({ kind: "fetch", remote: "origin" });
+  });
+
+  it("does not claim the upstream is gone on a branch that never had one", () => {
+    setup({ upstream: null, upstreamGone: false });
+    expect(screen.queryByText("upstream gone")).not.toBeInTheDocument();
+  });
+
+  it("does not say 'on the remote' when the lost upstream was a local branch", () => {
+    // `git branch --track topic main` gives a valid upstream that is a local
+    // branch. Telling the user it vanished from the remote, and offering to push
+    // to recreate it, would be wrong on both counts.
+    setup({ upstream: "main", upstreamOnRemote: false, upstreamGone: true });
+    const chip = screen.getByText("upstream gone");
+    expect(chip.getAttribute("title")).toMatch(/local branch this tracked/);
+    expect(chip.getAttribute("title")).not.toMatch(/on the remote/);
+    expect(screen.getByRole("button", { name: "Pull" })).toBeDisabled();
+  });
+
+  it("treats a healthy local-branch upstream as unpublished, not as remote-tracking", () => {
+    // The sync cluster is about a remote; `branch.topic.remote = "."` is not one,
+    // so counts against it would be meaningless here.
+    setup({ upstream: "main", upstreamOnRemote: false, ahead: 2, behind: 1 });
+    expect(screen.queryByText("↑2")).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Publish branch" })).toBeEnabled();
+    expect(screen.getByRole("button", { name: "Pull" })).toBeDisabled();
   });
 
   it("becomes Publish branch with no upstream, and sets one", () => {
