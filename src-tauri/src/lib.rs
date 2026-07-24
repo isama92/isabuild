@@ -1,15 +1,19 @@
 mod commands;
+pub mod git;
 pub mod pty;
 pub mod spawn;
+pub mod watcher;
 
 use pty::PtyManager;
 use tauri::Manager as _;
+use watcher::GitWatcher;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
         .setup(|app| {
             app.manage(PtyManager::default());
+            app.manage(GitWatcher::default());
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -17,7 +21,9 @@ pub fn run() {
             commands::pty_write,
             commands::pty_resize,
             commands::pty_kill,
-            commands::pty_exists
+            commands::pty_exists,
+            commands::git_status,
+            commands::git_watch
         ])
         .on_window_event(|window, event| {
             // Single-window app: closing it tears down every session. Once a
