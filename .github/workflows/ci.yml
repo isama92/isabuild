@@ -1,0 +1,85 @@
+name: CI
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+  push:
+    branches: [main]
+
+# Least privilege: CI only reads the repo.
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  # Supersede stale PR runs, but never cancel a post-merge run on main (it
+  # produces the post-merge signal and saves the shared build cache).
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  CARGO_TERM_COLOR: always
+  # Incremental artifacts bloat the cache and never help a cold CI runner.
+  CARGO_INCREMENTAL: 0
+
+jobs:
+  lint-test:
+    name: Lint & test (Linux)
+    runs-on: ubuntu-22.04
+    timeout-minutes: 30
+    # Skip while a PR is still a draft; still runs on push to main.
+    if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      # The tauri crate does not compile without the webkit/gtk dev headers
+      # (official Tauri v2 prerequisite list for Ubuntu 22.04).
+      - name: Install Tauri system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev build-essential curl wget file \
+            libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30 # stable
+        with:
+          toolchain: stable
+          components: rustfmt, clippy
+
+      - name: Cache cargo build
+        uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
+        with:
+          workspaces: src-tauri
+          # Only main writes the shared cache; PRs restore from it so branch
+          # builds do not each mint an entry and thrash the 10 GB cache limit.
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+
+      - name: Install Node
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        with:
+          node-version: 24
+          cache: npm
+
+      - name: Install npm dependencies
+        run: npm ci
+
+      # tauri::generate_context!() panics at compile time when frontendDist
+      # (../dist, gitignored) is missing, so the frontend must be built
+      # before ANY cargo step that expands the macro (clippy, test).
+      - name: Build frontend
+        run: npm run build
+
+      - name: Format
+        run: cargo fmt --all --check --manifest-path src-tauri/Cargo.toml
+
+      - name: Clippy
+        run: cargo clippy --manifest-path src-tauri/Cargo.toml --locked --all-targets -- -D warnings
+
+      - name: Backend tests
+        run: cargo test --manifest-path src-tauri/Cargo.toml --locked
+
+      - name: Frontend lint
+        run: npm run lint
+
+      - name: Frontend tests
+        run: npm test

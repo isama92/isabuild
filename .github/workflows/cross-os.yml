@@ -1,0 +1,65 @@
+name: Cross-OS tests
+
+# The PR gate (ci.yml) runs on Linux only. The PTY backend has cfg-gated
+# Windows/macOS behaviour (ConPTY exit protocol, kill semantics) that unit
+# tests can only prove on the real OS, so run the FULL cargo test suite —
+# not just a compile check — post-merge on main. Frontend tests are
+# platform-independent and stay in ci.yml. A separate push-only workflow
+# keeps the Windows (2x) / macOS (10x) runner cost off the PR checks.
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: cross-os-${{ github.ref }}
+  # Runs only on push to main; don't cancel a post-merge run when merges land
+  # back to back, or the earlier merge loses its cross-OS signal.
+  cancel-in-progress: false
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: 0
+
+jobs:
+  test:
+    name: Test (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 40
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-2022, macos-14]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30 # stable
+        with:
+          toolchain: stable
+
+      - name: Cache cargo build
+        uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
+        with:
+          workspaces: src-tauri
+          key: ${{ matrix.os }}
+
+      - name: Install Node
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        with:
+          node-version: 24
+          cache: npm
+
+      # tauri::generate_context!() panics at compile time when frontendDist
+      # (../dist, gitignored) is missing, so cargo test needs a built
+      # frontend even though no frontend test runs here.
+      - name: Build frontend
+        run: |
+          npm ci
+          npm run build
+
+      - name: Backend tests
+        run: cargo test --manifest-path src-tauri/Cargo.toml --locked
