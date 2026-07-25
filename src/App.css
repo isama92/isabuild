@@ -922,3 +922,254 @@ body {
   outline: 1px solid #6cb6ff;
   outline-offset: 1px;
 }
+
+/* --- Part 8: the welcome screen ------------------------------------------
+   What the main window shows with no project open. Not a modal and not a
+   window: the workspace Layout is simply not mounted, which is what keeps the
+   two PTYs from starting in a directory nobody chose. */
+
+.app-loading {
+  height: 100%;
+  background: #1e1e1e;
+}
+
+.welcome {
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  height: 100%;
+  overflow-y: auto;
+  background: #1e1e1e;
+  color: #cccccc;
+  font: 13px/1.5 system-ui, sans-serif;
+}
+
+.welcome-panel {
+  box-sizing: border-box;
+  width: 100%;
+  max-width: 560px;
+  padding: 56px 24px 40px;
+}
+
+.welcome-title {
+  margin: 0;
+  font-size: 26px;
+  font-weight: 600;
+}
+
+.welcome-subtitle {
+  margin: 6px 0 24px;
+  color: #8a8a8a;
+}
+
+.welcome-error,
+.welcome-notice {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 16px;
+  padding: 10px 12px;
+  border-radius: 3px;
+  border: 1px solid #a1260d;
+  background: rgba(161, 38, 13, 0.18);
+}
+
+.welcome-notice {
+  border-color: #6b5a2a;
+  background: rgba(226, 192, 141, 0.12);
+}
+
+.welcome-dismiss {
+  flex: none;
+  border: none;
+  background: none;
+  padding: 0;
+  color: #8a8a8a;
+  font: inherit;
+  cursor: pointer;
+}
+
+.welcome-dismiss:hover {
+  color: #cccccc;
+}
+
+.welcome-open {
+  width: 100%;
+  padding: 9px 14px;
+  border: none;
+  border-radius: 3px;
+  background: #2f6feb;
+  color: #fff;
+  font: inherit;
+  font-weight: 500;
+  cursor: pointer;
+}
+
+.welcome-open:hover:not(:disabled) {
+  background: #3b7ff5;
+}
+
+.welcome-open:disabled,
+.welcome-launch-folder:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
+.welcome-launch-folder {
+  display: block;
+  width: 100%;
+  margin-top: 8px;
+  padding: 8px 12px;
+  border: 1px solid #3c3c3c;
+  border-radius: 3px;
+  background: transparent;
+  color: #cccccc;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.welcome-launch-folder:hover:not(:disabled) {
+  background: #2a2d2e;
+}
+
+.welcome-section {
+  margin: 28px 0 8px;
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: #8a8a8a;
+}
+
+.welcome-empty {
+  margin: 0;
+  color: #6b6b6b;
+}
+
+.welcome-recents {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.welcome-recent {
+  display: flex;
+  align-items: stretch;
+  border-radius: 3px;
+}
+
+.welcome-recent:hover {
+  background: #2a2d2e;
+}
+
+.welcome-recent-open {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  padding: 7px 8px;
+  border: none;
+  background: none;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.welcome-recent-name {
+  font-weight: 500;
+}
+
+/* The full path under the name: two projects called `api` in different parents
+   are otherwise indistinguishable. */
+.welcome-recent-path {
+  overflow: hidden;
+  color: #8a8a8a;
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* A folder that has been deleted, unmounted, or is no longer a repository.
+   Dimmed and marked rather than dropped, so the list never looks like it
+   silently forgot something. */
+.welcome-recent--broken .welcome-recent-name,
+.welcome-recent--broken .welcome-recent-path {
+  color: #6b6b6b;
+}
+
+.welcome-recent-tag {
+  color: #e2c08d;
+  font-weight: 400;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+
+.welcome-recent-remove {
+  flex: none;
+  width: 28px;
+  border: none;
+  background: none;
+  color: #6b6b6b;
+  font-size: 15px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.welcome-recent-remove:hover:not(:disabled) {
+  color: #f14c4c;
+}
+
+.welcome-recent-open:focus-visible,
+.welcome-recent-remove:focus-visible,
+.welcome-open:focus-visible,
+.welcome-launch-folder:focus-visible,
+.welcome-dismiss:focus-visible {
+  outline: 1px solid #6cb6ff;
+  outline-offset: -1px;
+}
+
+/* A failure with a project open: the welcome screen is not on screen to render
+   it, so it surfaces here as a toast above the workspace. Without it, a menu
+   action that failed (a picker that would not open, a recent project since
+   deleted) is a click that silently did nothing. */
+.app-error {
+  position: fixed;
+  right: 16px;
+  bottom: 36px;
+  z-index: 40;
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  max-width: 460px;
+  padding: 10px 12px;
+  border: 1px solid #a1260d;
+  border-radius: 3px;
+  background: #3a1d15;
+  color: #cccccc;
+  font: 13px/1.4 system-ui, sans-serif;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.45);
+}
+
+.app-error-dismiss {
+  flex: none;
+  border: none;
+  background: none;
+  padding: 0;
+  color: #8a8a8a;
+  font: inherit;
+  cursor: pointer;
+}
+
+.app-error-dismiss:hover {
+  color: #cccccc;
+}
+
+.app-error-dismiss:focus-visible {
+  outline: 1px solid #6cb6ff;
+  outline-offset: 1px;
+}

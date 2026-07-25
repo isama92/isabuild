@@ -86,9 +86,10 @@ export interface GitState {
   notice: string | null;
 
   /**
-   * Fetch status. The first call resolves the repo from the app's launch
-   * directory; later calls reuse the resolved root. Never throws — a failure
-   * (e.g. not a git repository) lands in `phase: "error"` + `error`.
+   * Fetch status. The first call resolves the repo from the open project (the
+   * backend holds it); later calls reuse the resolved root, which is why
+   * switching projects resets this store. Never throws — a failure (no project
+   * open, or not a git repository) lands in `phase: "error"` + `error`.
    */
   refresh: () => Promise<void>;
   /** Fetch branch state. Never throws; a failure leaves the last known state. */

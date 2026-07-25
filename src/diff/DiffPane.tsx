@@ -22,7 +22,25 @@ import {
   type DiffSide,
 } from "../lib/diffMarkers";
 import { languageForPath } from "../lib/diffLanguage";
+import {
+  currentAppearance,
+  DEFAULT_MONO_STACK,
+  onAppearance,
+  type Appearance,
+} from "../lib/appearance";
 import { configureMonaco, DIFF_THEME } from "./monacoSetup";
+
+/**
+ * The font half of Monaco's options. `null` (no settings read yet) resolves to
+ * the same stack `resolveAppearance` gives an unset family, so a diff window
+ * opened before its settings arrive is not briefly proportional.
+ */
+function monacoFontOptions(appearance: Appearance | null): monaco.editor.IEditorOptions {
+  return {
+    fontFamily: appearance?.fontFamily ?? DEFAULT_MONO_STACK,
+    fontSize: appearance?.fontSize ?? 13,
+  };
+}
 
 export interface DiffPaneProps {
   /** HEAD side. Empty string for a file that is not in HEAD yet. */
@@ -133,11 +151,17 @@ export function DiffPane({
       automaticLayout: true,
       enableSplitViewResizing: true,
       renderLineHighlight: "none",
-      fontSize: 13,
-      fontFamily: "'JetBrains Mono', 'Fira Code', Menlo, Consolas, monospace",
+      // Seeded from the setting and then kept in step below. Monaco measures the
+      // font itself rather than reading CSS, so unlike CodeMirror it cannot pick
+      // up the custom properties and has to be told.
+      ...monacoFontOptions(currentAppearance()),
     });
     editor.setModel({ original, modified });
     editorRef.current = editor;
+
+    const stopFollowingAppearance = onAppearance((appearance) => {
+      editor.updateOptions(monacoFontOptions(appearance));
+    });
 
     const originalMarks = editor.getOriginalEditor().createDecorationsCollection();
     const modifiedMarks = editor.getModifiedEditor().createDecorationsCollection();
@@ -166,6 +190,7 @@ export function DiffPane({
 
     return () => {
       observer?.disconnect();
+      stopFollowingAppearance();
       for (const disposable of disposables) {
         disposable.dispose();
       }

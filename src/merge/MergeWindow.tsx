@@ -24,6 +24,7 @@ import { getCurrentWindow } from "@tauri-apps/api/window";
 import { MergePanes } from "./MergePanes";
 import { binaryConflictActions } from "../lib/conflictView";
 import { onRepoChanged } from "../lib/gitStatus";
+import { useAppearanceSync } from "../hooks/useAppearance";
 import { countConflictMarkers } from "../lib/mergeChunks";
 import {
   getConflictStages,
@@ -46,6 +47,10 @@ function isMergeable(stages: ConflictStages): boolean {
 }
 
 export function MergeWindow() {
+  // Reads the settings, follows other windows' changes, and pushes the font at
+  // the CSS variables and the CodeMirror panes.
+  useAppearanceSync();
+
   // The target never changes for the life of the window.
   const target = useMemo<{ params?: MergeParams; error?: string }>(() => {
     try {

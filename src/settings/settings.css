@@ -1,0 +1,127 @@
+/* Settings window chrome. Palette lifted from App.css so all four windows read
+   as one app; Part 8's theming step replaces these literals with variables. */
+
+html,
+body,
+#root {
+  height: 100%;
+  width: 100%;
+  margin: 0;
+  padding: 0;
+}
+
+body {
+  background: #1e1e1e;
+}
+
+.settings-window {
+  box-sizing: border-box;
+  height: 100%;
+  overflow-y: auto;
+  padding: 20px 24px 28px;
+  background: #1e1e1e;
+  color: #cccccc;
+  font: 13px/1.5 system-ui, sans-serif;
+}
+
+.settings-window--loading {
+  color: #8a8a8a;
+}
+
+.settings-title {
+  margin: 0 0 18px;
+  font-size: 18px;
+  font-weight: 600;
+}
+
+.settings-section {
+  margin-bottom: 24px;
+}
+
+.settings-section-title {
+  margin: 0 0 12px;
+  padding-bottom: 6px;
+  border-bottom: 1px solid #333;
+  font-size: 13px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: #8a8a8a;
+}
+
+.settings-field {
+  margin-bottom: 14px;
+}
+
+.settings-field--inline {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.settings-label {
+  display: block;
+  margin-bottom: 5px;
+  font-weight: 500;
+}
+
+.settings-select,
+.settings-number {
+  box-sizing: border-box;
+  padding: 5px 8px;
+  border: 1px solid #3c3c3c;
+  border-radius: 3px;
+  background: #252526;
+  color: #cccccc;
+  font: inherit;
+}
+
+.settings-select {
+  width: 100%;
+  max-width: 460px;
+}
+
+.settings-number {
+  width: 90px;
+}
+
+.settings-select:focus-visible,
+.settings-number:focus-visible {
+  outline: 1px solid #2f6feb;
+  outline-offset: -1px;
+}
+
+.settings-select:disabled {
+  color: #8a8a8a;
+}
+
+.settings-hint {
+  margin: 5px 0 0;
+  color: #8a8a8a;
+  font-size: 12px;
+}
+
+.settings-error {
+  margin: 6px 0 0;
+  color: #f14c4c;
+  font-size: 12px;
+}
+
+/* Rendered in the chosen font at the chosen size, so what is on screen here is
+   what the terminal will look like. */
+.settings-preview {
+  margin-top: 12px;
+  padding: 10px 12px;
+  border: 1px solid #333;
+  border-radius: 3px;
+  background: #252526;
+  font-family: var(--ib-mono-family, monospace);
+  font-size: var(--ib-mono-size, 14px);
+  line-height: 1.5;
+  white-space: pre;
+  overflow-x: auto;
+}
+
+.settings-preview-line + .settings-preview-line {
+  margin-top: 4px;
+}

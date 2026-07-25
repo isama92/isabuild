@@ -15,6 +15,7 @@ import { Terminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import { WebglAddon } from "@xterm/addon-webgl";
 import { base64ToBytes, stringToBase64 } from "./base64";
+import { currentAppearance, DEFAULT_MONO_STACK, onAppearance } from "./appearance";
 
 export interface PtyExitInfo {
   exitCode: number;
@@ -56,10 +57,14 @@ const RESIZE_DEBOUNCE_MS = 100; // ConPTY glitches on rapid resize storms
 const entries = new Map<string, Entry>();
 
 function createEntry(): Entry {
+  // The appearance may not have been published yet (a terminal can mount before
+  // the settings read resolves), so fall back to the same stack it resolves to
+  // for an unset family. `applyAppearance` corrects it the moment it arrives.
+  const appearance = currentAppearance();
   const term = new Terminal({
     cursorBlink: true,
-    fontFamily: "'JetBrains Mono', 'Fira Code', Menlo, Consolas, monospace",
-    fontSize: 14,
+    fontFamily: appearance?.fontFamily ?? DEFAULT_MONO_STACK,
+    fontSize: appearance?.fontSize ?? 14,
     scrollback: 5000,
     theme: {
       background: "#1e1e1e",
@@ -262,3 +267,27 @@ export async function restart(id: string, cmd?: string): Promise<void> {
   });
   e.term.focus();
 }
+
+// Follow the font setting for every live terminal. Registered at module load
+// (not per attach) because the entries outlive any component: a terminal in a
+// hidden region has no mounted React tree to react for it, and would otherwise
+// come back in the old font when the region is reopened.
+//
+// The font change resizes the character cell, so the same pixel box now holds a
+// different number of columns and rows. Without the refit and the `pty_resize`
+// that follows it, the shell keeps wrapping at the old width and everything
+// full-width (Claude Code's boxes, a `git log --graph`) draws ragged.
+onAppearance((appearance) => {
+  for (const [id, entry] of entries) {
+    entry.term.options.fontFamily = appearance.fontFamily;
+    entry.term.options.fontSize = appearance.fontSize;
+    // Only meaningful once the terminal is in the DOM; FitAddon throws on a
+    // detached element, and an unopened terminal has nothing to measure.
+    if (!entry.term.element) continue;
+    entry.fit.fit();
+    void invoke("pty_resize", { id, cols: entry.term.cols, rows: entry.term.rows }).catch(() => {
+      // The session may have exited between the font change and here; the
+      // exit path already surfaces that.
+    });
+  }
+});

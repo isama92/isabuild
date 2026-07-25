@@ -15,6 +15,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { DiffPane } from "./DiffPane";
 import { onRepoChanged } from "../lib/gitStatus";
+import { useAppearanceSync } from "../hooks/useAppearance";
 import { shouldAdoptDiskContent } from "../lib/diffSync";
 import {
   getFileDiff,
@@ -29,6 +30,10 @@ const SAVE_DEBOUNCE_MS = 400;
 type Phase = "loading" | "ready" | "error";
 
 export function DiffWindow() {
+  // Reads the settings, follows other windows' changes, and pushes the font at
+  // the CSS variables and Monaco.
+  useAppearanceSync();
+
   // The target never changes for the life of the window.
   const target = useMemo<{ params?: DiffParams; error?: string }>(() => {
     try {

@@ -43,6 +43,7 @@ import {
 import { defaultKeymap, history, historyKeymap } from "@codemirror/commands";
 import { languages } from "@codemirror/language-data";
 import { languageForPath } from "../lib/cmLanguage";
+import { onAppearance } from "../lib/appearance";
 import { mirrorScrollTop, worthScrolling } from "../lib/paneScroll";
 import {
   actionsFor,
@@ -375,6 +376,21 @@ export function MergePanes({ path, stages, value, onChange, busy }: MergePanesPr
       tracked.current = null;
     };
   }, [apply, mirrorFrom]);
+
+  // The font arrives through CSS custom properties (see codemirrorSetup's
+  // THEME), so no reconfiguration is needed — but CodeMirror caches the
+  // character width it measured at startup, and a stale cache puts the cursor,
+  // the chunk gutter arrows and the scroll sync at the wrong offsets. Asking
+  // each view to re-measure is the whole fix.
+  useEffect(
+    () =>
+      onAppearance(() => {
+        for (const view of Object.values(views.current)) {
+          view?.requestMeasure();
+        }
+      }),
+    [],
+  );
 
   // Adopt text the window decided to push in — a reload it judged safe, or the
   // buffer being reset. Guarded on inequality so a re-render never resets the

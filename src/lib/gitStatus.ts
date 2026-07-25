@@ -65,8 +65,9 @@ export function conflictHasMarkers(kind: ConflictKind): boolean {
 
 /**
  * Read the working-tree status of the repo containing `path`; omit `path` to
- * use the app's launch directory (the backend resolves it). Rejects when the
- * directory is not inside a git repository.
+ * use the open project (the backend holds it, and starts both terminals in the
+ * same place). Rejects when the directory is not inside a git repository, and
+ * when `path` is omitted with no project open.
  */
 export function getStatus(path?: string): Promise<GitStatus> {
   return invoke<GitStatus>("git_status", { path: path ?? null });

@@ -53,6 +53,9 @@ vi.mock("../lib/diffSource", async (importOriginal) => ({
 }));
 vi.mock("../lib/gitStatus", () => ({ onRepoChanged: vi.fn() }));
 vi.mock("@tauri-apps/api/window", () => ({ getCurrentWindow: vi.fn() }));
+// Appearance is covered by its own tests; stubbed here so this window does not
+// subscribe to the real settings event.
+vi.mock("../hooks/useAppearance", () => ({ useAppearanceSync: vi.fn() }));
 
 const getFileDiffMock = vi.mocked(getFileDiff);
 const writeWorkingFileMock = vi.mocked(writeWorkingFile);

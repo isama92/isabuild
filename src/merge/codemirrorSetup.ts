@@ -14,6 +14,7 @@ import { HighlightStyle, syntaxHighlighting } from "@codemirror/language";
 import { EditorState, type Extension } from "@codemirror/state";
 import { EditorView, lineNumbers } from "@codemirror/view";
 import { tags } from "@lezer/highlight";
+import { FONT_FAMILY_VAR, FONT_SIZE_VAR } from "../lib/appearance";
 
 /** Ours green, theirs blue: the chunk tints, shared with merge.css. */
 export const PANE_COLORS = {
@@ -49,10 +50,14 @@ const THEME = EditorView.theme(
       height: "100%",
       backgroundColor: "#1e1e1e",
       color: "#d4d4d4",
-      fontSize: "12px",
+      // The font setting, via the custom properties `lib/appearance` writes on
+      // the document root. Reading them here rather than reconfiguring the
+      // theme means a font change repaints with no CodeMirror transaction at
+      // all; MergePanes only has to ask the views to re-measure afterwards.
+      fontSize: `var(${FONT_SIZE_VAR}, 12px)`,
     },
     ".cm-scroller": {
-      fontFamily: "'JetBrains Mono', ui-monospace, monospace",
+      fontFamily: `var(${FONT_FAMILY_VAR}, 'JetBrains Mono', ui-monospace, monospace)`,
       lineHeight: "1.5",
       // Never wrap: a wrapped line breaks the correspondence between what is on
       // screen and what is in the file, and it desynchronises the panes' scroll
