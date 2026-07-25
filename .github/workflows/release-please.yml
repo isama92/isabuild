@@ -1,0 +1,51 @@
+name: Release-please
+
+# Versioning is automated, never hand-edited. src-tauri/Cargo.toml is the single
+# source of truth for the app version (tauri.conf.json deliberately has no
+# `version` key, so Tauri reads the manifest).
+#
+# This replaced release-plz, which cannot work for a Tauri app: its `git_only`
+# mode (mandatory here, since isabuild is not on crates.io and there is no
+# registry baseline to diff against) runs `cargo package` with verification,
+# hardcoded with no `--no-verify` escape. That compile can never succeed —
+# `cargo package` only includes files under src-tauri/, so the gitignored root
+# ../dist is absent and `generate_context!()` panics. Cargo cannot include files
+# above the package root, so committing dist/ would not rescue it either.
+# release-please computes versions from git history alone and never runs cargo.
+on:
+  push:
+    branches: [main]
+
+# `issues: write` is required by release-please-action and was not needed by
+# release-plz; without it the action fails when it labels the release PR.
+permissions:
+  contents: write
+  issues: write
+  pull-requests: write
+
+# Never cancel a release mid-flight.
+concurrency:
+  group: release-please-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  release-please:
+    name: Release-please
+    runs-on: ubuntu-22.04
+    timeout-minutes: 15
+    steps:
+      # No checkout step: the action reads the config, the manifest and the git
+      # history through the GitHub API.
+      #
+      # The token is the PAT, not GITHUB_TOKEN, for the same reason release-plz
+      # needed it: a release created by GITHUB_TOKEN fires no `release` event, so
+      # release.yml would never run and every release would ship with no
+      # installers attached. The secret name is inherited from the release-plz
+      # setup rather than renamed, so no repository secret has to change.
+      - name: Run release-please
+        id: release
+        uses: googleapis/release-please-action@45996ed1f6d02564a971a2fa1b5860e934307cf7 # v5.0.0
+        with:
+          token: ${{ secrets.RELEASE_PLZ_TOKEN }}
+          config-file: release-please-config.json
+          manifest-file: .release-please-manifest.json
