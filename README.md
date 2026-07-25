@@ -54,6 +54,24 @@ installers. They install and run, but the OS will say it cannot verify them:
 Signing and notarisation are deliberately out of scope; they need certificates that are not
 in this repository.
 
+## Known limitations
+
+- **The whole tree is watched, even the parts that are then filtered out.** Part 9 stopped
+  ignored paths producing refreshes, but not the OS-level watch itself. On Linux
+  `RecursiveMode::Recursive` installs one inotify watch per directory: in this checkout that
+  is 4,923 of them, of which 2,915 are `src-tauri/target/` and 1,731 `node_modules/`, leaving
+  279 anyone cares about. Comfortable against the usual 524,288 limit, but a distro still
+  shipping the old 8,192 default sits at 60% for a single project, and exhausting it makes
+  the sidebar stop updating. macOS and Windows use one stream per root and are unaffected.
+  Part 11 is the fix.
+- **A linked worktree or a submodule is not watched properly.** When the project's `.git` is a
+  *file* rather than a directory, the index, HEAD and refs live outside the watch root, so
+  staging in the terminal does not refresh the panel.
+- **A `git add -f` inside an ignored directory** can be missed until the next time the ignore
+  cache is discarded. The `git add` itself is always seen; later edits to that file may not
+  be.
+- **The app does not sign or notarise its installers.** See "Installing a build" above.
+
 ## Roadmap
 
 Each part is an independent plan (see `plans/`), executed in order. A part is done only when its acceptance criteria pass on macOS, Linux and Windows. Tick the box when a part is completed.
@@ -93,7 +111,39 @@ Each part is an independent plan (see `plans/`), executed in order. A part is do
   Bundles carry proper metadata and declare `git` as a dependency. Signing is not done: see
   "Installing a build" under Development.
 
-- [ ] **Part 9 - When there are no changes, on the sidebar the "No changes" text flickers**
+- [ ] **Part 9 — The "No changes" flicker** (`plans/PLAN-9-no-changes-flicker.md`)
+  On a clean repo the sidebar's "No changes" text flickered. Three independent defects
+  compose into that one symptom, and all three are fixed.
+
+  A **transient value in a render gate**: `refresh()` opened by setting `phase: "loading"`
+  and the empty state was gated on `phase === "ready"`, so every read blanked the panel
+  body for its duration. A *dirty* repo never showed it, because its rows are not gated on
+  the phase at all — which is why review and the existing test both missed it. `"loading"`
+  is gone from the type rather than merely worked around, so `phase` is the settled outcome
+  and no future reader can gate on an in-flight one. `phase: "idle"` gets its own
+  **"Loading changes…"**, for a first mount and a project switch, which also fixes a blank
+  first-mount panel; there is deliberately no spinner, because at the event rate involved a
+  spinner *is* the strobe.
+
+  A **watcher with no filtering**: the recursive watch discarded its debounced batch, so
+  `src-tauri/target/` (12 GB here) and `node_modules/` fed it continuously during
+  development, roughly 13 git subprocesses per event to be told the tree was still clean.
+  `watchfilter` now decides in five passes, cheapest first, asking `git check-ignore` only
+  as a last resort and caching each verdict for the whole ancestor chain, so a build
+  directory costs one question ever.
+
+  And **our own reads were the loudest source of events**: `notify`'s inotify mask includes
+  `OPEN`, so every file `git status` reads is itself an event, and answering one refresh
+  asked for the next — about seven a second on an idle clean repo, on ext4 as well as
+  tmpfs. That predates the filter (a plain `git status` was always enough) and is likely
+  much of what the original report was seeing. Paths are now compared against a remembered
+  mtime, length, ctime and mode instead of being taken at face value.
+
+  Reads are also **coalesced** (one cascade, at most one queued behind it, always resolving
+  after a read that began after the call), and two adjacent bugs are fixed: a project opened
+  mid-merge showed **no merge banner** until an unrelated file changed, and a read or
+  operation in flight across a **project switch** could report against the repo the user had
+  just moved to.
 
 - [ ] **Part 10 — Retire Monaco: one editor stack**
   Replace Part 4's Monaco diff viewer with `@codemirror/merge`, leaving CodeMirror 6 as the only editor in the app.
@@ -113,6 +163,28 @@ Each part is an independent plan (see `plans/`), executed in order. A part is do
   - Part 4's whole acceptance list needs re-verifying on all three OSes, including the auto-save and `shouldAdoptDiskContent` dance — subtle, and currently correct.
 
   **Do not do this for security.** The `dompurify` advisory that arrives with Monaco is closed on its own by a `"dompurify": "^3.4.12"` entry in `package.json`'s `overrides` (Monaco pins `3.4.8` exactly, which is why npm cannot lift it unaided). Its vulnerable paths are rendered-markdown sanitising for hovers and suggestion docs, and `monacoSetup.ts` already excludes the worker-backed language services that would produce any — so the exposure here is theoretical. Do this part for the one-stack simplification and the bundle size, or leave it undone.
+
+- [ ] **Part 11 — Watch only what matters**
+  Stop asking the OS to watch directories the filter is only going to discard.
+
+  **Why this exists.** Part 9 made ignored paths cost nothing *once reported*, but the watch
+  itself is still recursive over everything. On Linux that is one inotify watch per
+  directory: 4,923 in this checkout to observe the 279 that are not `target/` or
+  `node_modules/`, so 94% of the kernel memory and of the watch budget is spent on paths whose
+  events are thrown away. It is invisible at the usual 524,288 limit and fatal at the old
+  8,192 default, where a large monorepo can exhaust the budget and leave the sidebar silently
+  frozen — which is the same failure the user cannot detect and cannot force a refresh out of.
+
+  **What it needs.** `notify` has no include/exclude hook for `RecursiveMode::Recursive`, so
+  this means watching non-recursively and managing sub-watches ourselves: walk the tree
+  applying `watchfilter`'s own ignore rules, add a watch per surviving directory, and add or
+  drop watches as directories appear and disappear. The ignore decisions are already written
+  and tested; the new work is the bookkeeping, and getting "a directory was created inside a
+  watched one" right without racing the events that arrive before its watch exists.
+
+  **Also worth folding in**, since it needs the same code: the arming replay. Watching
+  recursively today reports every path it discovers as a synthetic event, so opening a project
+  spends a burst of `check-ignore` batches learning what it could have learned during the walk.
 
 ## Global decisions
 
