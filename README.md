@@ -52,7 +52,9 @@ Each part is an independent plan (see `plans/`), executed in order. A part is do
 - [ ] **Part 8 — Polish & packaging**
   Themes, settings, keybindings, PTY cleanup on close, Tauri bundling and signing.
 
-- [ ] **Part 9 — Retire Monaco: one editor stack**
+- [ ] **Part 9 - When there are no changes, on the sidebar the "No changes" text flickers**
+
+- [ ] **Part 10 — Retire Monaco: one editor stack**
   Replace Part 4's Monaco diff viewer with `@codemirror/merge`, leaving CodeMirror 6 as the only editor in the app.
 
   **Why this exists.** Part 7 brought CodeMirror in for the merge editor, so the app now ships *two* full editor stacks doing overlapping jobs: two syntax-highlighting registries, two theme definitions, two sets of test shims, two mental models. `@codemirror/merge`'s `MergeView` already covers most of what Part 4 needs — side-by-side panes, one editable side, built-in revert controls (Part 4's `»` restore-a-block arrow), intra-line highlighting — and it aligns the two documents with **spacer blocks**, which is strictly better than the proportional scroll sync Part 7 settled for.
