@@ -1,5 +1,11 @@
 import { describe, expect, it } from "vitest";
-import { baseOptions, branchLabel, fetchAgeLabel, filterBranches } from "./branchView";
+import {
+  baseOptions,
+  branchLabel,
+  fetchAgeLabel,
+  filterBranches,
+  syncAvailability,
+} from "./branchView";
 import type { BranchState, LocalBranch, RemoteBranch } from "./gitBranch";
 
 function local(name: string, upstream?: string): LocalBranch {
@@ -163,5 +169,60 @@ describe("branchLabel", () => {
 
   it("falls back to a plain label when there is neither", () => {
     expect(branchLabel(state({ current: null, detachedSha: null }))).toBe("no branch");
+  });
+});
+
+describe("syncAvailability", () => {
+  it("offers fetch whenever there is a remote, even with nothing to pull", () => {
+    // A stale ahead/behind is exactly when a fetch is wanted most.
+    const sync = syncAvailability(state({ ahead: 0, behind: 0 }));
+    expect(sync.canFetch).toBe(true);
+  });
+
+  it("offers no fetch with no remote", () => {
+    expect(syncAvailability(state({ remote: null })).canFetch).toBe(false);
+  });
+
+  it("offers pull only when there is something behind to pull", () => {
+    expect(syncAvailability(state({ behind: 3 })).canPull).toBe(true);
+    expect(syncAvailability(state({ behind: 0 })).canPull).toBe(false);
+  });
+
+  it("offers no pull when the upstream was pruned away", () => {
+    // Configured but dead: the counts are meaningless and the pull cannot work.
+    const sync = syncAvailability(state({ behind: 3, upstreamGone: true }));
+    expect(sync.canPull).toBe(false);
+  });
+
+  it("offers no pull when the upstream is a local branch", () => {
+    // Tracking a local branch is not a remote relationship at all.
+    const sync = syncAvailability(state({ behind: 3, upstreamOnRemote: false }));
+    expect(sync.canPull).toBe(false);
+  });
+
+  it("offers push to publish a branch that has no upstream yet", () => {
+    const sync = syncAvailability(state({ upstream: null, ahead: 0 }));
+    expect(sync.canPush).toBe(true);
+    expect(sync.setUpstream).toBe(true);
+  });
+
+  it("offers no push when an upstream exists and there is nothing ahead", () => {
+    const sync = syncAvailability(state({ ahead: 0 }));
+    expect(sync.canPush).toBe(false);
+    expect(sync.setUpstream).toBe(false);
+  });
+
+  it("offers nothing but fetch on an unborn branch", () => {
+    // No commits, so nothing to push and nothing to merge into.
+    const sync = syncAvailability(state({ unborn: true, current: "main", ahead: 2 }));
+    expect(sync.canPush).toBe(false);
+    expect(sync.canPull).toBe(false);
+    expect(sync.canFetch).toBe(true);
+  });
+
+  it("offers nothing but fetch on a detached HEAD", () => {
+    const sync = syncAvailability(state({ current: null, ahead: 2, behind: 2 }));
+    expect(sync.canPush).toBe(false);
+    expect(sync.canPull).toBe(false);
   });
 });

@@ -1,8 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { render } from "@testing-library/react";
+import { act, render } from "@testing-library/react";
 import * as monaco from "monaco-editor/editor/editor.api";
 import { DiffPane } from "./DiffPane";
-import { MARKER_COLORS } from "../lib/diffMarkers";
+import { markerColors } from "../lib/diffMarkers";
+import { DEFAULT_THEME, themeById } from "../theme/themes";
+import { publishAppearance, resetAppearance } from "../lib/appearance";
 
 // Monaco does not run under jsdom, so this test stands in for it and asserts
 // the contract instead: which options the diff editor is built with, what the
@@ -30,6 +32,7 @@ let resizeCallback: (() => void) | undefined;
 const disposed: string[] = [];
 let createOptions: Record<string, unknown> = {};
 const updateOptions = vi.fn();
+const setThemeMock = vi.fn();
 
 function createModel(value: string, language: string): FakeModel {
   const handlers: (() => void)[] = [];
@@ -58,7 +61,7 @@ function createModel(value: string, language: string): FakeModel {
 // languages) pull the real Monaco in, which needs browser APIs jsdom lacks.
 vi.mock("./monacoSetup", () => ({
   configureMonaco: vi.fn(),
-  DIFF_THEME: "test-theme",
+  monacoThemeName: (theme: { id: string }) => `isabuild-${theme.id}`,
 }));
 
 vi.mock("monaco-editor/editor/editor.api", () => {
@@ -76,6 +79,9 @@ vi.mock("monaco-editor/editor/editor.api", () => {
     },
     editor: {
       OverviewRulerLane: { Full: 7 },
+      // Wrapped rather than referenced directly: the factory is hoisted above
+      // the const, so naming the spy here would read it before initialisation.
+      setTheme: (name: string) => setThemeMock(name),
       createModel: (value: string, language: string) => createModel(value, language),
       setModelLanguage: (model: FakeModel, language: string) => {
         model.language = language;
@@ -142,6 +148,9 @@ beforeEach(() => {
 afterEach(() => {
   vi.clearAllMocks();
   vi.unstubAllGlobals();
+  // The appearance is a module singleton; a theme published by one test would
+  // otherwise seed the next one's editor.
+  resetAppearance();
 });
 
 describe("DiffPane", () => {
@@ -199,8 +208,41 @@ describe("DiffPane", () => {
       (decorationSets[side].at(-1) as monaco.editor.IModelDeltaDecoration[]).map(
         (decoration) => decoration.options.overviewRuler?.color,
       );
-    expect(colours("original")).toEqual([MARKER_COLORS.added, MARKER_COLORS.removed]);
-    expect(colours("modified")).toEqual([MARKER_COLORS.added, MARKER_COLORS.removed]);
+    const dark = markerColors(DEFAULT_THEME);
+    expect(colours("original")).toEqual([dark.added, dark.removed]);
+    expect(colours("modified")).toEqual([dark.added, dark.removed]);
+  });
+
+  it("re-marks the scrollbar when the theme changes", () => {
+    // The regression this guards: Monaco stores the colour it was handed at
+    // decoration time, so a theme change that only calls setTheme leaves the
+    // overview ruler painted in the previous palette.
+    lineChanges = [
+      {
+        originalStartLineNumber: 10,
+        originalEndLineNumber: 0,
+        modifiedStartLineNumber: 11,
+        modifiedEndLineNumber: 12,
+        charChanges: undefined,
+      },
+    ];
+    render(<DiffPane {...props} />);
+    fireDiffUpdate();
+
+    const light = themeById("vscode-light");
+    act(() => {
+      publishAppearance(document.createElement("div"), {
+        fontFamily: "x",
+        fontSize: 13,
+        theme: light,
+      });
+    });
+
+    const latest = decorationSets.original.at(-1) as monaco.editor.IModelDeltaDecoration[];
+    expect(latest.map((d) => d.options.overviewRuler?.color)).toEqual([
+      markerColors(light).added,
+    ]);
+    expect(setThemeMock).toHaveBeenCalledWith("isabuild-vscode-light");
   });
 
   it("reports the left pane's width so the header can track the sash", () => {

@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { WebviewWindow } from "@tauri-apps/api/webviewWindow";
 import { diffWindowLabel, diffWindowUrl, openDiffWindow } from "./diffWindow";
+import { DEFAULT_THEME } from "../theme/themes";
 
 // The constructor doubles as the creation call, so the mock records its args
 // and hands back a stub whose `once` fires the outcome we choose per test.
@@ -98,7 +99,13 @@ describe("diffWindowLabel", () => {
 describe("diffWindowUrl", () => {
   it("encodes the target into the diff document's query string", () => {
     const url = diffWindowUrl({ repoRoot: "/home/dev/my repo", path: "src/a b.ts" });
-    expect(url).toBe("diff.html?repo=%2Fhome%2Fdev%2Fmy+repo&path=src%2Fa+b.ts");
+    expect(url).toContain("repo=%2Fhome%2Fdev%2Fmy+repo");
+    expect(url).toContain("path=src%2Fa+b.ts");
+  });
+
+  it("tells the new window which theme to paint before it can read the settings", () => {
+    const url = diffWindowUrl({ repoRoot: "/repo", path: "a.ts" });
+    expect(url).toContain(`theme=${DEFAULT_THEME.id}`);
   });
 
   it("includes the rename origin only when present", () => {

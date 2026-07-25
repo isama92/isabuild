@@ -9,13 +9,17 @@ use tauri::{AppHandle, Emitter, Manager as _, State};
 
 use crate::branch::{self, BranchState, DirtyPolicy, SwitchOutcome, SwitchTarget};
 use crate::diff::{self, Eol, FileDiff};
+use crate::fonts::{self, FontFamily};
 use crate::git::{self, GitError, GitStatus};
 use crate::gitops::GitOps;
+use crate::menu::MenuState;
 use crate::merge::{
     self, ConflictStages, MergeOutcome, MergeState, OpAction, PathResolution, ResolveOutcome,
 };
+use crate::project::{self, ActiveProject, Project, RecentProject, RecentState};
 use crate::pty::{PtyEvent, PtyManager, SpawnParams};
 use crate::remote::{self, OpEvent, RemoteOpSpec};
+use crate::settings::{Settings, SettingsPatch, SettingsStore};
 use crate::spawn::{default_cwd, joined_command, shell_spec};
 use crate::watcher::GitWatcher;
 
@@ -41,6 +45,10 @@ fn event_sink(app: AppHandle) -> impl Fn(PtyEvent) + Send + 'static {
 /// Spawn a PTY session. `cmd`/`args` are joined unquoted and run through the
 /// platform shell (login shell on Unix, Git Bash/PowerShell on Windows);
 /// `cmd: None` gives a plain interactive shell.
+///
+/// `cwd: None` means "the open project", which is how both workspace terminals
+/// call it. Since Part 8 the frontend only mounts them once a project is open,
+/// so no project is a bug rather than a state to guess a directory for.
 // The arg list mirrors the frontend invoke payload 1:1; grouping into a
 // struct would only move the count into JSON nesting.
 #[allow(clippy::too_many_arguments)]
@@ -48,6 +56,7 @@ fn event_sink(app: AppHandle) -> impl Fn(PtyEvent) + Send + 'static {
 pub async fn pty_spawn(
     app: AppHandle,
     state: State<'_, PtyManager>,
+    active: State<'_, ActiveProject>,
     id: String,
     cmd: Option<String>,
     args: Vec<String>,
@@ -68,7 +77,11 @@ pub async fn pty_spawn(
             }
             Some(dir)
         }
-        None => default_cwd(),
+        None => Some(
+            active
+                .repo_root()
+                .ok_or_else(|| "cannot start a terminal: no project is open".to_string())?,
+        ),
     };
     state
         .spawn(
@@ -114,19 +127,21 @@ pub async fn pty_exists(state: State<'_, PtyManager>, id: String) -> Result<bool
 }
 
 /// Read the working-tree status of the repository containing `path`. With
-/// `path: None` we resolve the app's launch directory (`spawn::default_cwd`,
-/// the same directory the bottom terminal opens in) — Part 3 ships without a
-/// folder picker, so this is the sole repo source for now.
+/// `path: None` we use the open project, which is also what both terminals are
+/// started in, so the panel and the shells can never disagree about the repo.
 ///
 /// The `git` subprocess blocks, so it runs on the blocking pool rather than
 /// stalling an async runtime worker (a git status on a large repo is not fast).
 #[tauri::command]
-pub async fn git_status(path: Option<String>) -> Result<GitStatus, String> {
+pub async fn git_status(
+    active: State<'_, ActiveProject>,
+    path: Option<String>,
+) -> Result<GitStatus, String> {
     let start = match path {
         Some(p) => PathBuf::from(p),
-        None => default_cwd()
-            .or_else(|| std::env::current_dir().ok())
-            .ok_or_else(|| "could not determine a working directory".to_string())?,
+        None => active
+            .repo_root()
+            .ok_or_else(|| "no project is open".to_string())?,
     };
     tauri::async_runtime::spawn_blocking(move || git::status_from(&start))
         .await
@@ -497,4 +512,284 @@ pub async fn git_watch(
             Path::new(&repo_root),
         )
         .map_err(|e| e.to_string())
+}
+
+// --- Part 8: settings, the open project and the menu ------------------------
+
+/// Everything the frontend needs before it can draw anything, in one round trip:
+/// which project to reopen, what the recents are, and whether the settings file
+/// on disk was readable.
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Bootstrap {
+    pub settings: Settings,
+    pub recents: Vec<RecentProject>,
+    /// The reopened project, or `None` for the welcome screen.
+    pub project: Option<Project>,
+    /// Why `last_project` did not reopen, if it did not.
+    pub project_error: Option<String>,
+    /// Why the settings on disk were replaced by defaults, if they were.
+    pub settings_warning: Option<String>,
+    /// The directory the app was launched from, when it is a repo that is not
+    /// already the open project. The welcome screen offers it as one click, so
+    /// `npm run tauri dev` from a checkout still lands in that checkout.
+    pub launch_folder: Option<RecentProject>,
+}
+
+/// Emit the settings to every window and bring the menu up to date. Called
+/// after any change to something either of them shows.
+///
+/// The menu only reinstalls when what it *displays* changed (see
+/// `MenuState::refresh`), so a font or theme save does not replace it.
+fn broadcast(app: &AppHandle, settings: &Settings, project_open: bool) {
+    // Emit failures only happen during teardown; ignore.
+    let _ = app.emit("settings://changed", settings);
+    if let Err(err) = app
+        .state::<MenuState>()
+        .refresh(app, &settings.recent_projects, project_open)
+    {
+        // A menu that failed to rebuild is stale, not fatal: it still opens the
+        // previous set of recents, all of which still work.
+        eprintln!("could not rebuild the application menu: {err}");
+    }
+}
+
+#[tauri::command]
+pub async fn bootstrap(
+    app: AppHandle,
+    store: State<'_, SettingsStore>,
+    active: State<'_, ActiveProject>,
+) -> Result<Bootstrap, String> {
+    let settings = store.get();
+
+    // Reopening is best-effort: a project that has been deleted or is no longer
+    // a repo puts the user on the welcome screen with the reason, rather than
+    // failing the whole startup.
+    let (project, project_error) = match &settings.last_project {
+        Some(path) => {
+            let path = path.clone();
+            match tauri::async_runtime::spawn_blocking(move || project::open(&path))
+                .await
+                .map_err(|e| format!("open project task failed: {e}"))?
+            {
+                Ok(project) => {
+                    active.set(project.clone());
+                    (Some(project), None)
+                }
+                Err(err) => (None, Some(err.to_string())),
+            }
+        }
+        None => (None, None),
+    };
+
+    let launch_folder = match project {
+        Some(_) => None,
+        None => tauri::async_runtime::spawn_blocking(default_launch_folder)
+            .await
+            .map_err(|e| format!("launch folder task failed: {e}"))?,
+    };
+
+    let recents = project::describe(&settings.recent_projects);
+    if let Err(err) =
+        app.state::<MenuState>()
+            .refresh(&app, &settings.recent_projects, project.is_some())
+    {
+        eprintln!("could not build the application menu: {err}");
+    }
+
+    Ok(Bootstrap {
+        settings_warning: store.warning().map(str::to_string),
+        settings,
+        recents,
+        project,
+        project_error,
+        launch_folder,
+    })
+}
+
+/// The repository the app was launched from, if it was launched from one.
+/// Blocking: runs `git`.
+///
+/// Reported as the *repo root*, not the launch directory, so the welcome screen
+/// can compare it to a recents entry by string: launching from a subdirectory
+/// would otherwise offer a row duplicating one already in the list, and on
+/// Windows git's forward slashes would never match the process cwd's
+/// backslashes.
+fn default_launch_folder() -> Option<RecentProject> {
+    let root = project::repo_root_of(&default_cwd()?)?;
+    let path = root.to_string_lossy().into_owned();
+    Some(RecentProject {
+        name: project::folder_name(&path),
+        path,
+        state: RecentState::Ok,
+    })
+}
+
+#[tauri::command]
+pub async fn settings_get(store: State<'_, SettingsStore>) -> Result<Settings, String> {
+    Ok(store.get())
+}
+
+/// Apply a partial change and persist it. The saved settings are returned to the
+/// caller *and* broadcast, so a window that changed nothing still repaints.
+#[tauri::command]
+pub async fn settings_update(
+    app: AppHandle,
+    store: State<'_, SettingsStore>,
+    active: State<'_, ActiveProject>,
+    patch: SettingsPatch,
+) -> Result<Settings, String> {
+    let settings = store
+        .update(|current| current.apply(patch))
+        .map_err(|e| e.to_string())?;
+    broadcast(&app, &settings, active.get().is_some());
+    Ok(settings)
+}
+
+/// Installed font families. Blocking (it parses every font file), so it runs on
+/// the blocking pool; the result is cached for the life of the process.
+#[tauri::command]
+pub async fn list_fonts() -> Result<Vec<FontFamily>, String> {
+    tauri::async_runtime::spawn_blocking(|| fonts::families().to_vec())
+        .await
+        .map_err(|e| format!("font scan task failed: {e}"))
+}
+
+/// Native folder picker. `None` means the user cancelled.
+///
+/// Driven from Rust rather than the JS dialog API so no window needs a dialog
+/// capability. The command is `async`, so it runs off the main thread, which is
+/// what `blocking_pick_folder` requires.
+#[tauri::command]
+pub async fn pick_folder(app: AppHandle) -> Result<Option<String>, String> {
+    use tauri_plugin_dialog::DialogExt as _;
+
+    let picked = app.dialog().file().blocking_pick_folder();
+    let Some(picked) = picked else {
+        return Ok(None);
+    };
+    let path = picked
+        .into_path()
+        .map_err(|e| format!("could not read the chosen folder: {e}"))?;
+    Ok(Some(path.to_string_lossy().into_owned()))
+}
+
+/// Open `path` as the project: validate it, make it the active project, and
+/// remember it as the one to reopen next launch.
+///
+/// The caller is the frontend, which swaps the workspace only once this resolves
+/// — so by the time the new Layout mounts, `git_status` and `pty_spawn` already
+/// answer for the new repo.
+#[tauri::command]
+pub async fn project_open(
+    app: AppHandle,
+    store: State<'_, SettingsStore>,
+    active: State<'_, ActiveProject>,
+    pty: State<'_, PtyManager>,
+    watcher: State<'_, GitWatcher>,
+    path: String,
+) -> Result<Project, String> {
+    let project = tauri::async_runtime::spawn_blocking(move || project::open(&path))
+        .await
+        .map_err(|e| format!("open project task failed: {e}"))?
+        .map_err(|e| e.to_string())?;
+
+    // Persist BEFORE tearing anything down. `update` writes to disk and can
+    // fail (a read-only config directory, a full disk); failing after the
+    // teardown would leave a mounted workspace whose PTYs are dead, whose
+    // watcher is stopped, and whose git reads answer for a different repo.
+    // Nothing here has changed yet, so the caller's error path is honest.
+    let settings = store
+        .update(|current| {
+            current.push_recent(&project.repo_root);
+            current.last_project = Some(project.repo_root.clone());
+        })
+        .map_err(|e| e.to_string())?;
+
+    // Switching projects is a close plus an open: the running Claude Code and
+    // shell are rooted in the old directory and cannot follow.
+    if active
+        .get()
+        .is_some_and(|current| current.repo_root != project.repo_root)
+    {
+        teardown_workspace(&app, &pty, &watcher);
+    }
+
+    active.set(project.clone());
+    broadcast(&app, &settings, true);
+    Ok(project)
+}
+
+/// Return to the welcome screen: stop everything rooted in the project, and
+/// forget it so the next launch does not reopen it.
+#[tauri::command]
+pub async fn project_close(
+    app: AppHandle,
+    store: State<'_, SettingsStore>,
+    active: State<'_, ActiveProject>,
+    pty: State<'_, PtyManager>,
+    watcher: State<'_, GitWatcher>,
+) -> Result<(), String> {
+    // Persisted first, for the reason in `project_open`: a failed write here
+    // must leave a working workspace, not a dead one.
+    let settings = store
+        .update(|current| current.last_project = None)
+        .map_err(|e| e.to_string())?;
+
+    teardown_workspace(&app, &pty, &watcher);
+    active.clear();
+    broadcast(&app, &settings, false);
+    Ok(())
+}
+
+/// Stop everything rooted in the project that is going away.
+///
+/// The PTY kill deliberately does *not* live in a React cleanup: CLAUDE.md's
+/// rule is that unmounting a component never kills a PTY (that is what makes
+/// dev HMR survivable), and this is an explicit user action instead. Diff and
+/// merge windows go with it because they auto-save into a repo that is about to
+/// stop being the project; `close` (not `destroy`) so each still flushes. And
+/// the watcher stops rather than being left to be replaced by the next
+/// `git_watch`: `useRepoWatch` swallows a failed re-arm, which would otherwise
+/// leave the old project's watch firing `repo://changed` at the new one.
+fn teardown_workspace(app: &AppHandle, pty: &PtyManager, watcher: &GitWatcher) {
+    pty.kill_all();
+    watcher.stop();
+    crate::close_secondary_windows(app);
+}
+
+#[tauri::command]
+pub async fn project_current(active: State<'_, ActiveProject>) -> Result<Option<Project>, String> {
+    Ok(active.get())
+}
+
+#[tauri::command]
+pub async fn recent_projects(
+    store: State<'_, SettingsStore>,
+) -> Result<Vec<RecentProject>, String> {
+    Ok(project::describe(&store.get().recent_projects))
+}
+
+/// Forget one recent project. Only touches the list: the folder is left alone.
+#[tauri::command]
+pub async fn recent_remove(
+    app: AppHandle,
+    store: State<'_, SettingsStore>,
+    active: State<'_, ActiveProject>,
+    path: String,
+) -> Result<Vec<RecentProject>, String> {
+    let settings = store
+        .update(|current| {
+            current.remove_recent(&path);
+            // A project removed from the list should not come back at the next
+            // launch either. Compared with `settings::same_path`, the same way
+            // the list itself is: two comparisons that can drift apart would
+            // eventually remove the row and still reopen it.
+            if current.last_project_is(&path) {
+                current.last_project = None;
+            }
+        })
+        .map_err(|e| e.to_string())?;
+    broadcast(&app, &settings, active.get().is_some());
+    Ok(project::describe(&settings.recent_projects))
 }

@@ -8,6 +8,9 @@
 // how an already-open window is found again.
 
 import { WebviewWindow } from "@tauri-apps/api/webviewWindow";
+import { currentAppearance } from "./appearance";
+import { DEFAULT_THEME } from "../theme/themes";
+import { THEME_PARAM } from "../theme/initialTheme";
 
 export interface FileTarget {
   /** Repository root, as resolved by `git_status`. */
@@ -93,4 +96,17 @@ export async function openFileWindow(options: OpenFileWindowOptions): Promise<vo
       reject(new Error(`could not open ${options.subject}: ${event.payload}`));
     });
   });
+}
+
+/**
+ * Add the opener's theme id to a new window's query string.
+ *
+ * A new document paints before it can read the settings, and every colour in
+ * the CSS is a custom property that is unset until then. The opener already
+ * knows the answer, so it says so in the URL and the new window is right on its
+ * first frame rather than flashing the default and correcting itself.
+ */
+export function withTheme(params: URLSearchParams): URLSearchParams {
+  params.set(THEME_PARAM, currentAppearance()?.theme.id ?? DEFAULT_THEME.id);
+  return params;
 }

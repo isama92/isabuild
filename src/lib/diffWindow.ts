@@ -7,7 +7,7 @@
 // the creation-failure handling live in lib/fileWindow, shared with the merge
 // window (Part 6).
 
-import { fileWindowLabel, openFileWindow } from "./fileWindow";
+import { fileWindowLabel, openFileWindow, withTheme } from "./fileWindow";
 
 export interface DiffTarget {
   /** Repository root, as resolved by `git_status`. */
@@ -34,7 +34,7 @@ export function diffWindowUrl(target: DiffTarget): string {
   if (target.origPath) {
     params.set("orig", target.origPath);
   }
-  return `diff.html?${params.toString()}`;
+  return `diff.html?${withTheme(params).toString()}`;
 }
 
 /**

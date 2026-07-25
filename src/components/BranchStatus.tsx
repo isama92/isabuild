@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { BranchMenu, type BranchPick } from "./BranchMenu";
 import {
   DeleteBranchDialog,
@@ -8,7 +8,7 @@ import {
   OpErrorDialog,
   RenameBranchDialog,
 } from "./GitDialogs";
-import { branchLabel, fetchAgeLabel } from "../lib/branchView";
+import { branchLabel, fetchAgeLabel, syncAvailability } from "../lib/branchView";
 import { useGitStore } from "../store/gitStore";
 import { useLayoutStore } from "../store/layoutStore";
 import type { DirtyPolicy, SwitchTarget } from "../lib/gitBranch";
@@ -40,14 +40,52 @@ export function BranchStatus() {
   const notice = useGitStore((state) => state.notice);
   const mergeState = useGitStore((state) => state.mergeState);
   const requestShellCommand = useLayoutStore((state) => state.requestShellCommand);
+  // Lifted into the store in Part 8 so a keybinding can open it. Everything
+  // else about the menu still belongs to this component.
+  const menuOpen = useLayoutStore((state) => state.branchMenuOpen);
+  const setMenuOpen = useLayoutStore((state) => state.setBranchMenuOpen);
+  const toggleMenu = useLayoutStore((state) => state.toggleBranchMenu);
+  const pendingGitAction = useLayoutStore((state) => state.pendingGitAction);
+  const clearPendingGitAction = useLayoutStore((state) => state.clearPendingGitAction);
 
-  const [menuOpen, setMenuOpen] = useState(false);
   const [dialog, setDialog] = useState<Dialog | null>(null);
   // `Date.now()` may not be called during render (impure, and the value would go
   // stale the moment it was rendered). Sampled when the pointer or keyboard focus
   // reaches the Fetch button — exactly when its tooltip is about to be read — so
   // the age is fresh without any polling timer.
   const [fetchNow, setFetchNow] = useState<number | null>(null);
+
+  // A keystroke asked for a sync operation. Consumed here rather than run from
+  // the keybinding hook because only this component knows whether it is
+  // currently possible, and a keybinding must never do what the disabled button
+  // would refuse to.
+  //
+  // Declared above the early return below, as the rules of hooks require, so it
+  // reads the branch state from the store rather than from the narrowed local.
+  useEffect(() => {
+    if (pendingGitAction === null) return;
+    clearPendingGitAction();
+    const git = useGitStore.getState();
+    const state = git.branch;
+    // No branch read yet, or an operation already running: git would refuse a
+    // second one anyway, and the button is hidden while one runs.
+    if (state === null || git.op !== null) return;
+
+    const sync = syncAvailability(state);
+    const remote = sync.remote ?? "";
+    if (pendingGitAction === "fetch" && sync.canFetch) {
+      void git.runOp({ kind: "fetch", remote });
+    } else if (pendingGitAction === "pull" && sync.canPull) {
+      void git.runOp({ kind: "pull", remote });
+    } else if (pendingGitAction === "push" && sync.canPush) {
+      void git.runOp({
+        kind: "push",
+        remote,
+        branch: state.current ?? undefined,
+        setUpstream: sync.setUpstream,
+      });
+    }
+  }, [pendingGitAction, clearPendingGitAction]);
 
   // Nothing to show until the first branch read lands (or outside a repo).
   if (!branch || !repoRoot) return null;
@@ -119,6 +157,9 @@ export function BranchStatus() {
   }
 
   const label = branchLabel(branch);
+  // The same source the keybinding effect above uses, so a keystroke and a
+  // click can never disagree about whether an operation is possible.
+  const sync = syncAvailability(branch);
   const canSync = branch.current !== null && !branch.unborn;
   // Configured, still present, and actually on a remote. A pruned upstream is
   // configured but dead, so its counts are meaningless and pulling cannot work;
@@ -200,7 +241,7 @@ export function BranchStatus() {
             className="branch-action"
             aria-label="Fetch"
             title={fetchTitle}
-            disabled={!remote}
+            disabled={!sync.canFetch}
             onMouseEnter={() => setFetchNow(Date.now())}
             onFocus={() => setFetchNow(Date.now())}
             onClick={() => void store().runOp({ kind: "fetch", remote: remote ?? "" })}
@@ -221,7 +262,7 @@ export function BranchStatus() {
                     ? "Nothing to pull"
                     : `Pull ${branch.behind} from ${branch.upstream ?? ""}`
             }
-            disabled={!canSync || !hasUpstream || branch.behind === 0}
+            disabled={!sync.canPull}
             onClick={() => void store().runOp({ kind: "pull", remote: remote ?? "" })}
           >
             <span aria-hidden="true">{"↓"}</span>
@@ -246,13 +287,13 @@ export function BranchStatus() {
                       ? "Nothing to push"
                       : `Push ${branch.ahead} to ${branch.upstream ?? ""}`
             }
-            disabled={!canSync || !remote || (hasUpstream && branch.ahead === 0)}
+            disabled={!sync.canPush}
             onClick={() =>
               void store().runOp({
                 kind: "push",
                 remote: remote ?? "",
                 branch: branch.current ?? undefined,
-                setUpstream: !hasUpstream,
+                setUpstream: sync.setUpstream,
               })
             }
           >
@@ -276,7 +317,7 @@ export function BranchStatus() {
           aria-expanded={menuOpen}
           title={branch.upstream ? `${label} → ${branch.upstream}` : label}
           disabled={busy}
-          onClick={() => setMenuOpen((open) => !open)}
+          onClick={toggleMenu}
         >
           <span aria-hidden="true">{"⑂"}</span>
           <span className="branch-current-name">{label}</span>

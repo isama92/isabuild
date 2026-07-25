@@ -79,3 +79,52 @@ describe("layoutStore", () => {
     expect(useLayoutStore.getState().statusPanelSize).toBe(35);
   });
 });
+
+describe("the branch menu", () => {
+  it("starts closed", () => {
+    expect(useLayoutStore.getState().branchMenuOpen).toBe(false);
+  });
+
+  it("toggles and sets", () => {
+    useLayoutStore.getState().toggleBranchMenu();
+    expect(useLayoutStore.getState().branchMenuOpen).toBe(true);
+
+    useLayoutStore.getState().toggleBranchMenu();
+    expect(useLayoutStore.getState().branchMenuOpen).toBe(false);
+
+    useLayoutStore.getState().setBranchMenuOpen(true);
+    expect(useLayoutStore.getState().branchMenuOpen).toBe(true);
+  });
+});
+
+describe("a git action a keystroke asked for", () => {
+  it("starts with nothing pending", () => {
+    expect(useLayoutStore.getState().pendingGitAction).toBeNull();
+  });
+
+  it("records the request and clears it again", () => {
+    // BranchStatus consumes it, because only it knows whether the operation is
+    // currently possible.
+    useLayoutStore.getState().requestGitAction("pull");
+    expect(useLayoutStore.getState().pendingGitAction).toBe("pull");
+
+    useLayoutStore.getState().clearPendingGitAction();
+    expect(useLayoutStore.getState().pendingGitAction).toBeNull();
+  });
+
+  it("replaces an earlier request rather than queueing it", () => {
+    // Two keystrokes in quick succession: the second is what the user meant.
+    useLayoutStore.getState().requestGitAction("pull");
+    useLayoutStore.getState().requestGitAction("push");
+    expect(useLayoutStore.getState().pendingGitAction).toBe("push");
+  });
+
+  it("is reset by initialLayoutState, which the project switch merges in", () => {
+    useLayoutStore.getState().requestGitAction("pull");
+    useLayoutStore.getState().setBranchMenuOpen(true);
+    useLayoutStore.setState(initialLayoutState);
+
+    expect(useLayoutStore.getState().pendingGitAction).toBeNull();
+    expect(useLayoutStore.getState().branchMenuOpen).toBe(false);
+  });
+});

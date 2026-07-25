@@ -10,15 +10,17 @@ export default defineConfig(async () => ({
   plugins: [react()],
 
   build: {
-    // Three windows, three documents: the main workspace, the per-file diff
-    // window (Part 4) and the per-file merge window (Part 6). Separate entries
-    // keep Monaco out of the main bundle and, more importantly, stop the
-    // secondary windows from mounting the workspace Layout and spawning PTYs.
+    // Four windows, four documents: the main workspace, the per-file diff
+    // window (Part 4), the per-file merge window (Part 6) and the single
+    // settings window (Part 8). Separate entries keep Monaco out of the main
+    // bundle and, more importantly, stop the secondary windows from mounting
+    // the workspace Layout and spawning PTYs.
     rollupOptions: {
       input: {
         main: "index.html",
         diff: "diff.html",
         merge: "merge.html",
+        settings: "settings.html",
       },
     },
   },

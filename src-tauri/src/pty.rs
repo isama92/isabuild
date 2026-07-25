@@ -223,10 +223,20 @@ impl PtyManager {
                 let mut buf = [0u8; 8192];
                 loop {
                     match reader.read(&mut buf) {
-                        Ok(n) if n > 0 => sink(PtyEvent::Output {
-                            id: id.clone(),
-                            data_b64: BASE64.encode(&buf[..n]),
-                        }),
+                        // The kill check is per read, not just before the exit
+                        // event: a killed child's buffered output is still
+                        // readable until EOF, and session ids are reused (Part
+                        // 8 switches projects without changing them). Emitting
+                        // it would paint the old project's last lines into the
+                        // terminal the new project has already attached to the
+                        // same `pty://output/<id>` channel.
+                        Ok(n) if n > 0 && !killed.load(Ordering::SeqCst) => {
+                            sink(PtyEvent::Output {
+                                id: id.clone(),
+                                data_b64: BASE64.encode(&buf[..n]),
+                            });
+                        }
+                        Ok(n) if n > 0 => continue, // killed: drain, do not emit
                         // EOF, or read error once the master is dropped.
                         _ => break,
                     }

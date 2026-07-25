@@ -37,6 +37,18 @@ export interface LayoutState {
    * `lib/ptySession`'s job.
    */
   pendingShellCommand: string | null;
+  /**
+   * Whether the branch menu is open. Lifted out of BranchStatus's local state
+   * in Part 8 so a keybinding can open it; the component still owns everything
+   * else about it.
+   */
+  branchMenuOpen: boolean;
+  /**
+   * A sync operation a keystroke asked for. BranchStatus consumes it, because
+   * only BranchStatus knows whether the operation is currently possible — a
+   * keybinding must not do what the disabled button would refuse to.
+   */
+  pendingGitAction: GitActionRequest | null;
   toggleBottomTerminal: () => void;
   setBottomTerminalVisible: (visible: boolean) => void;
   setBottomTerminalSize: (size: number) => void;
@@ -46,7 +58,14 @@ export interface LayoutState {
   /** Reveal and focus the bottom terminal, and queue `command` for it. */
   requestShellCommand: (command: string) => void;
   clearPendingShellCommand: () => void;
+  setBranchMenuOpen: (open: boolean) => void;
+  toggleBranchMenu: () => void;
+  requestGitAction: (action: GitActionRequest) => void;
+  clearPendingGitAction: () => void;
 }
+
+/** The sync operations a keybinding can ask for. */
+export type GitActionRequest = "fetch" | "pull" | "push";
 
 /** Data fields only (no actions), so tests can reset via a merge setState. */
 export const initialLayoutState = {
@@ -56,6 +75,8 @@ export const initialLayoutState = {
   statusPanelVisible: true,
   statusPanelSize: 22,
   pendingShellCommand: null as string | null,
+  branchMenuOpen: false,
+  pendingGitAction: null as GitActionRequest | null,
 };
 
 export const useLayoutStore = create<LayoutState>((set) => ({
@@ -86,4 +107,8 @@ export const useLayoutStore = create<LayoutState>((set) => ({
       bottomTerminalAutoFocus: true,
     }),
   clearPendingShellCommand: () => set({ pendingShellCommand: null }),
+  setBranchMenuOpen: (open) => set({ branchMenuOpen: open }),
+  toggleBranchMenu: () => set((state) => ({ branchMenuOpen: !state.branchMenuOpen })),
+  requestGitAction: (action) => set({ pendingGitAction: action }),
+  clearPendingGitAction: () => set({ pendingGitAction: null }),
 }));

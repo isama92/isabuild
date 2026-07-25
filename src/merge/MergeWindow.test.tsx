@@ -55,6 +55,9 @@ vi.mock("@tauri-apps/api/window", () => ({
     },
   }),
 }));
+// Appearance is covered by its own tests; stubbed here so this window does not
+// subscribe to the real settings event.
+vi.mock("../hooks/useAppearance", () => ({ useAppearanceSync: vi.fn() }));
 
 const getConflictStagesMock = vi.mocked(getConflictStages);
 const writeResolvedMock = vi.mocked(writeResolved);
@@ -471,7 +474,7 @@ describe("MergeWindow", () => {
       render(<MergeWindow />);
       await waitFor(() => expect(screen.getByTestId("panes")).toBeInTheDocument());
 
-      fireEvent.keyDown(window, { key: "Escape" });
+      fireEvent.keyDown(window, { key: "Escape", code: "Escape" });
       expect(closeMock).toHaveBeenCalledTimes(1);
 
       fireEvent.keyDown(window, { key: "w", ctrlKey: true });

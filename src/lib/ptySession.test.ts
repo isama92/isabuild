@@ -1,6 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { invoke } from "@tauri-apps/api/core";
 import { attach, restart } from "./ptySession";
+import { publishAppearance, resetAppearance } from "./appearance";
+import { DEFAULT_THEME, themeById } from "../theme/themes";
 import { bytesToBase64 } from "./base64";
 
 const hoisted = vi.hoisted(() => {
@@ -8,6 +10,9 @@ const hoisted = vi.hoisted(() => {
     cols = 80;
     rows = 24;
     element: HTMLElement | null = null;
+    // xterm exposes its live options for mutation; the appearance subscriber
+    // writes the font here rather than rebuilding the terminal.
+    options: Record<string, unknown> = {};
     write = vi.fn();
     reset = vi.fn();
     focus = vi.fn();
@@ -15,7 +20,10 @@ const hoisted = vi.hoisted(() => {
     dataHandler: ((data: string) => void) | null = null;
     disposeSpy = vi.fn();
 
-    constructor() {
+    constructor(options: Record<string, unknown> = {}) {
+      // Real xterm copies its constructor options into `.options`, which is
+      // what the appearance subscriber then mutates.
+      this.options = { ...options };
       terminals.push(this);
     }
 
@@ -99,6 +107,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  resetAppearance();
   vi.unstubAllGlobals();
   vi.clearAllMocks();
   hoisted.terminals.length = 0;
@@ -334,5 +343,100 @@ describe("restart", () => {
 
   it("rejects for a session that was never attached", async () => {
     await expect(restart("never-attached")).rejects.toThrow(/no terminal attached/);
+  });
+});
+
+describe("the font setting", () => {
+  it("reaches every live terminal, including one in a hidden region", async () => {
+    // Entries outlive their components: a collapsed terminal has no mounted
+    // React tree to react for it, so the subscription is module-level.
+    mockBackend();
+    const first = nextId();
+    const second = nextId();
+    attach(container, { id: first });
+    const otherContainer = document.createElement("div");
+    document.body.appendChild(otherContainer);
+    attach(otherContainer, { id: second });
+    await flush();
+
+    publishAppearance(document.createElement("div"), {
+      fontFamily: "'Fira Code'",
+      fontSize: 17,
+      theme: DEFAULT_THEME,
+    });
+
+    for (const term of hoisted.terminals) {
+      expect(term.options.fontFamily).toBe("'Fira Code'");
+      expect(term.options.fontSize).toBe(17);
+    }
+  });
+
+  it("resizes the PTY, because the cell size changed with the font", async () => {
+    // Without this the shell keeps wrapping at the old width and everything
+    // full-width draws ragged.
+    mockBackend();
+    const id = nextId();
+    attach(container, { id });
+    await flush();
+    invokeMock.mockClear();
+    mockBackend();
+
+    publishAppearance(document.createElement("div"), {
+      fontFamily: "'Fira Code'",
+      fontSize: 17,
+      theme: DEFAULT_THEME,
+    });
+
+    // Asserted by id rather than by count: the module map still holds the
+    // sessions every earlier test attached, and they are resized too.
+    expect(callsTo("pty_resize").map(([, args]) => args)).toContainEqual({
+      id,
+      cols: 80,
+      rows: 24,
+    });
+  });
+
+  it("seeds a terminal created after the change with the current font", async () => {
+    // A terminal mounted later (reopening a collapsed region) must not come
+    // back in the default font.
+    publishAppearance(document.createElement("div"), {
+      fontFamily: "'Fira Code'",
+      fontSize: 17,
+      theme: DEFAULT_THEME,
+    });
+    mockBackend();
+    attach(container, { id: nextId() });
+    await flush();
+
+    expect(hoisted.terminals.at(-1)!.options).toMatchObject({
+      fontFamily: "'Fira Code'",
+      fontSize: 17,
+    });
+    // xterm's theme, not ours: the palette is translated into the 16 ANSI slots
+    // plus the surface colours it draws itself.
+    expect(hoisted.terminals.at(-1)!.options.theme).toMatchObject({
+      background: DEFAULT_THEME.tokens.bg,
+      brightGreen: DEFAULT_THEME.tokens.ansiBrightGreen,
+    });
+  });
+
+  it("repaints every live terminal when the theme changes", async () => {
+    mockBackend();
+    attach(container, { id: nextId() });
+    await flush();
+
+    const light = themeById("vscode-light");
+    publishAppearance(document.createElement("div"), {
+      fontFamily: "'Fira Code'",
+      fontSize: 17,
+      theme: light,
+    });
+
+    // Including the ANSI palette: the shell picks its own colours from it, so
+    // a light background under a dark palette leaves an unreadable prompt.
+    expect(hoisted.terminals.at(-1)!.options.theme).toMatchObject({
+      background: light.tokens.bg,
+      green: light.tokens.ansiGreen,
+    });
   });
 });

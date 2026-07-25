@@ -9,19 +9,27 @@
 // happens to hold lines would leave a delete-only file with a blank scrollbar
 // on the right.
 
+import type { Theme } from "../theme/themes";
+
 export type MarkerKind = "added" | "modified" | "removed";
 export type DiffSide = "original" | "modified";
 
 /**
  * Scrollbar colour per kind: new lines green, changed lines blue, removed lines
- * red. Lives here rather than in the Monaco setup so it can be read without
- * loading Monaco (which does not run under jsdom).
+ * red, from the active theme. A function rather than a constant because the
+ * theme can change while a diff window is open, and Monaco holds the colour it
+ * was handed at decoration time.
+ *
+ * Lives here rather than in the Monaco setup so it can be read without loading
+ * Monaco (which does not run under jsdom).
  */
-export const MARKER_COLORS: Record<MarkerKind, string> = {
-  added: "#3fb950",
-  modified: "#3794ff",
-  removed: "#f14c4c",
-};
+export function markerColors(theme: Theme): Record<MarkerKind, string> {
+  return {
+    added: theme.tokens.markAdded,
+    modified: theme.tokens.markModified,
+    removed: theme.tokens.markDeleted,
+  };
+}
 
 export interface DiffMarker {
   kind: MarkerKind;

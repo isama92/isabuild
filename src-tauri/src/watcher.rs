@@ -75,6 +75,13 @@ impl GitWatcher {
         *self.inner.lock().expect("git watcher mutex poisoned") = Some(debouncer);
         Ok(())
     }
+
+    /// Stop watching entirely. Closing a project has nothing to watch, and a
+    /// live watch on a folder the user has finished with would keep firing
+    /// `repo://changed` at a workspace that is no longer there.
+    pub fn stop(&self) {
+        *self.inner.lock().expect("git watcher mutex poisoned") = None;
+    }
 }
 
 #[cfg(test)]
@@ -135,6 +142,29 @@ mod tests {
         assert!(
             rx.recv_timeout(Duration::from_secs(5)).is_ok(),
             "the re-armed watch on the second dir must fire"
+        );
+    }
+
+    #[test]
+    fn stop_releases_the_watch() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let (tx, rx) = mpsc::channel();
+        let watcher = GitWatcher::default();
+        watcher
+            .watch(
+                move || {
+                    let _ = tx.send(());
+                },
+                dir.path(),
+            )
+            .expect("watch starts");
+
+        watcher.stop();
+        std::fs::write(dir.path().join("change.txt"), b"hello").expect("write");
+
+        assert!(
+            rx.recv_timeout(Duration::from_millis(800)).is_err(),
+            "a stopped watcher must not fire at the closed project"
         );
     }
 
