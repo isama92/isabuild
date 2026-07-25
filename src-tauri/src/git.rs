@@ -138,6 +138,27 @@ pub fn status_from(start: &Path) -> Result<GitStatus, GitError> {
     run_status(&root)
 }
 
+/// Read the status of an **already-resolved** repository root, skipping the
+/// `rev-parse --show-toplevel` that [`status_from`] spends on discovery.
+///
+/// Worth the separate entry point because this is the most frequent read in the
+/// app: the watcher drives it, and halving its subprocess count matters most on
+/// Windows, where spawning is the expensive part.
+///
+/// Discovery is still paid on the failure path, and only there. `run_status` on a
+/// directory that is not a repository fails with git's own stderr, which is a worse
+/// message than [`GitError::NotARepo`], so the question is asked once its answer
+/// matters rather than never.
+pub fn status_at(root: &Path) -> Result<GitStatus, GitError> {
+    match run_status(root) {
+        Err(GitError::CommandFailed(stderr)) => match resolve_repo_root(root) {
+            Err(not_a_repo @ GitError::NotARepo(_)) => Err(not_a_repo),
+            _ => Err(GitError::CommandFailed(stderr)),
+        },
+        other => other,
+    }
+}
+
 /// `git -C <start> rev-parse --show-toplevel`. A non-zero exit means `start`
 /// is not inside a repository (the common, non-exceptional case).
 pub fn resolve_repo_root(start: &Path) -> Result<PathBuf, GitError> {
@@ -346,6 +367,9 @@ pub fn parse_porcelain_v2(bytes: &[u8]) -> (Vec<FileEntry>, Vec<FileEntry>, Vec<
                 // `? <path>` — skip the two-byte "? " prefix.
                 let line = String::from_utf8_lossy(token);
                 if let Some(path) = line.get(2..) {
+                    if is_save_temp(path) {
+                        continue;
+                    }
                     unstaged.push(FileEntry {
                         path: path.to_string(),
                         orig_path: None,
@@ -359,6 +383,25 @@ pub fn parse_porcelain_v2(bytes: &[u8]) -> (Vec<FileEntry>, Vec<FileEntry>, Vec<
     }
 
     (staged, unstaged, conflicts)
+}
+
+/// Whether an untracked path is the diff window's own atomic-save temp file,
+/// caught mid-write.
+///
+/// `write_worktree_file` creates it in the target's directory, writes, chmods and
+/// renames onto the target, so for about a millisecond it exists as an untracked
+/// file. A status read that lands in that window reports it, and a row appears in
+/// the sidebar and vanishes. The watcher drops its *events*, but that cannot help
+/// here: the read this arrives on was triggered by something else entirely.
+///
+/// Untracked records only. A tracked file with this name is the user's, and a real
+/// change to it must still be shown. Porcelain v2 always uses forward slashes,
+/// Windows included, so the basename split is platform-independent.
+fn is_save_temp(path: &str) -> bool {
+    path.rsplit('/')
+        .next()
+        .unwrap_or(path)
+        .starts_with(crate::SAVE_TEMP_PREFIX)
 }
 
 /// Map a `u` record's `<XY>` to a [`ConflictKind`].
@@ -749,5 +792,59 @@ mod tests {
         let error = check_ignored(dir.path(), &slugs(&["anything.txt"]))
             .expect_err("not a repository must fail");
         assert!(matches!(error, GitError::CommandFailed(_)));
+    }
+
+    #[test]
+    fn status_at_reads_an_already_resolved_root() {
+        let dir = repo_ignoring_a_directory();
+        let status = status_at(dir.path()).expect("status reads");
+        // The root comes back exactly as handed in, which is what lets the frontend
+        // keep echoing it back.
+        assert_eq!(status.repo_root, dir.path().to_string_lossy());
+    }
+
+    #[test]
+    fn status_at_still_reports_a_non_repo_as_not_a_repo() {
+        // The message must not degrade to git's raw stderr just because discovery
+        // was skipped on the happy path.
+        let dir = tempfile::tempdir().expect("temp dir");
+        // A temp dir can sit inside someone's checkout; only assert the variant when
+        // git agrees it is not in one (the project.rs pattern).
+        match status_at(dir.path()) {
+            Err(GitError::NotARepo(_)) => {}
+            Ok(_) => { /* the temp dir happened to be inside a repo */ }
+            Err(other) => panic!("unexpected error: {other}"),
+        }
+    }
+
+    #[test]
+    fn an_untracked_save_temp_file_is_not_reported() {
+        // The phantom row: a status read that lands in the ~1 ms window while the
+        // diff window's atomic save has its temp file on disk.
+        let (_, unstaged, _) = parse_porcelain_v2(&z(&[
+            "? .isabuild-save-Ab12cd",
+            "? src/deep/.isabuild-save-Ab12cd",
+            "? keep.txt",
+        ]));
+        assert_eq!(
+            unstaged.iter().map(|e| e.path.as_str()).collect::<Vec<_>>(),
+            vec!["keep.txt"]
+        );
+    }
+
+    #[test]
+    fn a_tracked_save_temp_file_is_still_reported() {
+        // Untracked records only: a tracked file with that name is the user's.
+        let (staged, _, _) = parse_porcelain_v2(&z(&[
+            "1 M. N... 100644 100644 100644 h h .isabuild-save-Ab12cd",
+        ]));
+        assert_eq!(staged.len(), 1);
+    }
+
+    #[test]
+    fn a_similarly_named_untracked_file_is_still_reported() {
+        let (_, unstaged, _) =
+            parse_porcelain_v2(&z(&["? src/isabuild-save-x", "? src/.isabuild-saved.txt"]));
+        assert_eq!(unstaged.len(), 2);
     }
 }

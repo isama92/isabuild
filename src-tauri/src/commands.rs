@@ -137,16 +137,33 @@ pub async fn git_status(
     active: State<'_, ActiveProject>,
     path: Option<String>,
 ) -> Result<GitStatus, String> {
-    let start = match path {
-        Some(p) => PathBuf::from(p),
-        None => active
-            .repo_root()
-            .ok_or_else(|| "no project is open".to_string())?,
+    let open = active.repo_root();
+    // Skip discovery only where the root is provably one already: the open project's
+    // own, or the value a previous call returned, which the frontend echoes back on
+    // every refresh after the first.
+    //
+    // The comparison is what makes that safe. `run_status` reports whatever root it
+    // was handed, so trusting `path` blindly would let a *subdirectory* come back as
+    // `repoRoot`, and the frontend stores that and then uses it for every diff, merge,
+    // branch and remote operation afterwards. Not a trade worth one process.
+    let (start, resolved) = match path {
+        Some(p) => {
+            let p = PathBuf::from(p);
+            let known = open.as_deref() == Some(p.as_path());
+            (p, known)
+        }
+        None => (open.ok_or_else(|| "no project is open".to_string())?, true),
     };
-    tauri::async_runtime::spawn_blocking(move || git::status_from(&start))
-        .await
-        .map_err(|e| format!("git status task failed: {e}"))?
-        .map_err(|e| e.to_string())
+    tauri::async_runtime::spawn_blocking(move || {
+        if resolved {
+            git::status_at(&start)
+        } else {
+            git::status_from(&start)
+        }
+    })
+    .await
+    .map_err(|e| format!("git status task failed: {e}"))?
+    .map_err(|e| e.to_string())
 }
 
 /// Both sides of one file's diff: the HEAD revision and the working-tree file.
