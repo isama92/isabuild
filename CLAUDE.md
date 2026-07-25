@@ -42,12 +42,14 @@ npm run lint                                       # eslint + tsc --noEmit
 
 ## Versioning and releases
 
-Versioning is automated by release-plz. **Never hand-edit a version in a feature PR.**
+Versioning is automated by release-please. **Never hand-edit a version in a feature PR.**
 
-- **`src-tauri/Cargo.toml` is the single source of truth.** `src-tauri/tauri.conf.json` deliberately has no `version` key so Tauri falls back to the manifest; a test in `src-tauri/src/lib.rs` fails if anyone re-adds one. `package.json`/`package-lock.json` carry the same version only because npm wants one — `release-plz.yml` syncs them into the release PR.
-- **Two steps.** Push to `main` → release-plz opens a `chore: release X.Y.Z` PR bumping `src-tauri/Cargo.toml`, `src-tauri/Cargo.lock`, `CHANGELOG.md` and the npm pair. Merging *that* PR tags `vX.Y.Z` and publishes the GitHub release, which triggers `release.yml` to build and attach the Linux/Windows/macOS installers.
-- `release-plz.yml` must pass `manifest_path: src-tauri/Cargo.toml`. There is no root `Cargo.toml`; without it release-plz reads the repo root, finds no manifest and fails before doing anything.
-- **`release-plz.yml` must use `secrets.RELEASE_PLZ_TOKEN`, never `GITHUB_TOKEN`.** A release created by `GITHUB_TOKEN` fires no `release` event, so `release.yml` would never run and the release would ship with no installers.
-- Do not add `publish = false` to `src-tauri/Cargo.toml`. It marks the package non-publishable, which makes release-plz skip tagging entirely. The crates.io publish is blocked in `.github/release-plz.toml` instead.
+- **Two steps.** Push to `main` → release-please opens a `chore: release X.Y.Z` PR bumping `src-tauri/Cargo.toml`, `src-tauri/Cargo.lock`, `CHANGELOG.md` and the npm pair. Merging *that* PR tags `vX.Y.Z` and publishes the GitHub release, which triggers `release.yml` to build and attach the Linux/Windows/macOS installers.
+- **`src-tauri/Cargo.toml` is the single source of truth for the app version.** `src-tauri/tauri.conf.json` deliberately has no `version` key so Tauri falls back to the manifest; a test in `src-tauri/src/lib.rs` fails if anyone re-adds one. `package.json`/`package-lock.json` carry the same version only because npm wants one.
+- **`.release-please-manifest.json` is where release-please records the last released version.** Unlike release-plz it does not read git tags for this, so that file is load-bearing state — do not hand-edit it.
+- **The release-please package is rooted at `.`, not `src-tauri`.** It has to be: release-please throws `illegal pathing characters` for any path containing `..`, so a package rooted at `src-tauri/` could not reach the root `CHANGELOG.md` or `package.json`. Hence `release-type: node` (which bumps the npm pair and the changelog natively) plus an `extra-files` TOML updater for `src-tauri/Cargo.toml`.
+- **`release-please.yml` syncs `src-tauri/Cargo.lock` itself**, because release-please only knows about files it is told to update. A stale lock makes every `--locked` build fail with "cannot update the lock file". `cargo update --workspace` is the right tool: it re-resolves only workspace members, so no dependency drifts into a release PR.
+- **`release-please.yml` must use `secrets.RELEASE_PLZ_TOKEN`, never `GITHUB_TOKEN`.** A release created by `GITHUB_TOKEN` fires no `release` event, so `release.yml` would never run and the release would ship with no installers. It also needs `issues: write`.
+- **Do not reintroduce release-plz.** It cannot work here. `git_only` is mandatory (isabuild is not on crates.io, so there is no registry baseline and it never bumps at all), but `git_only` runs `cargo package` with verification — hardcoded, no `--no-verify` — which compiles the crate. That compile cannot succeed: `cargo package` only includes files under `src-tauri/`, so the gitignored root `../dist` is missing and `generate_context!()` panics. Cargo cannot include files above the package root, so committing `dist/` would not help either.
 - Third-party actions are pinned by commit SHA with a version comment; keep the pinning when editing a workflow.
 

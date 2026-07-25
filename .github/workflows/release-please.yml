@@ -49,3 +49,40 @@ jobs:
           token: ${{ secrets.RELEASE_PLZ_TOKEN }}
           config-file: release-please-config.json
           manifest-file: .release-please-manifest.json
+
+      # release-please bumps src-tauri/Cargo.toml (extra-files) but knows nothing
+      # about src-tauri/Cargo.lock, which records the same version. Left stale,
+      # every `--locked` invocation in ci.yml, cross-os.yml and release.yml fails
+      # with "cannot update the lock file because --locked was passed" — verified
+      # locally, exit 101.
+      #
+      # `cargo update --workspace` re-resolves only workspace members, so the
+      # diff is exactly the one version line and no dependency drifts into the
+      # release PR. --offline keeps it that way; it needs no registry access
+      # because only the local manifest is re-read.
+      - name: Checkout for the Cargo.lock sync
+        if: steps.release.outputs.prs_created == 'true'
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          # The PAT, kept in the local git config, so the extra commit can be
+          # pushed onto release-please's PR branch.
+          token: ${{ secrets.RELEASE_PLZ_TOKEN }}
+          persist-credentials: true
+
+      - name: Sync Cargo.lock into the release PR
+        if: steps.release.outputs.prs_created == 'true'
+        env:
+          GITHUB_TOKEN: ${{ secrets.RELEASE_PLZ_TOKEN }}
+          PR: ${{ steps.release.outputs.pr }}
+        run: |
+          set -euo pipefail
+          gh pr checkout "$(jq -r .number <<<"$PR")"
+          cargo update --workspace --offline --manifest-path src-tauri/Cargo.toml
+          if git diff --quiet; then
+            echo "Cargo.lock already in sync"
+          else
+            git config user.name 'github-actions[bot]'
+            git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+            git commit -am "chore: sync Cargo.lock"
+            git push
+          fi
