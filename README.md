@@ -111,7 +111,7 @@ Each part is an independent plan (see `plans/`), executed in order. A part is do
   Bundles carry proper metadata and declare `git` as a dependency. Signing is not done: see
   "Installing a build" under Development.
 
-- [ ] **Part 9 — The "No changes" flicker** (`plans/PLAN-9-no-changes-flicker.md`)
+- [x] **Part 9 — The "No changes" flicker** (`plans/PLAN-9-no-changes-flicker.md`)
   On a clean repo the sidebar's "No changes" text flickered. Three independent defects
   compose into that one symptom, and all three are fixed.
 
