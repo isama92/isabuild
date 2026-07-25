@@ -70,6 +70,11 @@ export function useMenuEvents(): MenuEvents {
         // past the end means the click raced a removal, so do nothing.
         const recent = store.recents[event.index];
         if (recent === undefined) return;
+        // Already open. `push_recent` puts the current project at the front, so
+        // this is the first entry in the menu and the easiest thing to click by
+        // mistake. Doing nothing beats a confirmation that promises Claude Code
+        // will stop and then reopens what is already there.
+        if (recent.path === store.project?.repoRoot) return;
         const action: PendingMenuAction = { kind: "open-recent", path: recent.path };
         if (store.project === null) perform(action);
         else setPending(action);

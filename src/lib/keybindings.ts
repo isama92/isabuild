@@ -356,6 +356,12 @@ export function conflictsWith(
  * windows. Binding an action to one of these produces a row that looks bound
  * and does nothing (or, for Ctrl+S in the diff window, shadows the save), so
  * the settings window refuses them with a reason.
+ *
+ * Both the Ctrl and the Meta spelling are listed on every platform, even though
+ * `CmdOrCtrl` resolves to exactly one of them per platform. Refusing the
+ * inapplicable one costs nothing and keeps a config that travels between a Mac
+ * and a Linux box working on both — which is why the refusal says a combination
+ * *could* clash rather than asserting it is taken here.
  */
 const RESERVED: readonly { accelerator: string; by: string; scopes: readonly Scope[] }[] = [
   { accelerator: "Ctrl+O", by: "Open Folder in the File menu", scopes: ["workspace"] },

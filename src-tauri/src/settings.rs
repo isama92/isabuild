@@ -28,8 +28,13 @@ use serde::{Deserialize, Serialize};
 
 /// How many projects the welcome screen and the Open Recent submenu remember.
 pub const MAX_RECENT: usize = 5;
-/// Id of the theme a fresh install starts on. Must exist in the frontend's
-/// theme registry (`src/theme/themes.ts`).
+/// Id of the theme a fresh install starts on.
+///
+/// Duplicated across the language boundary: the frontend registry
+/// (`src/theme/themes.ts`) has to name the same one, or a fresh install would
+/// store an id the registry cannot resolve and silently fall back. Both sides
+/// pin the literal in a test, so changing one without the other fails there
+/// rather than in the app.
 pub const DEFAULT_THEME: &str = "vscode-dark";
 pub const DEFAULT_FONT_SIZE: u16 = 14;
 /// Font sizes outside this range make the app unusable, and a bad value in a
@@ -308,17 +313,28 @@ impl SettingsStore {
         &self.path
     }
 
-    /// Mutate and persist. The lock is released before the write returns to the
-    /// caller, but is held across the write itself so two concurrent updates
-    /// cannot interleave into a file that matches neither.
+    /// Mutate and persist, or neither.
+    ///
+    /// The change is applied to a clone and only committed to memory once the
+    /// file is on disk. Mutating in place first would leave the two diverged on
+    /// a failed write: `project_open` would have set `last_project` and pushed
+    /// the recent in memory, and the next *successful* save — a theme change, a
+    /// font-size keystroke — would persist that, so the following launch would
+    /// reopen a project that never successfully opened. `recent_remove` has the
+    /// same shape: it would report a removal that is not on disk.
+    ///
+    /// The lock is held across the write, so two concurrent updates cannot
+    /// interleave into a file that matches neither.
     pub fn update<F>(&self, change: F) -> Result<Settings, SettingsError>
     where
         F: FnOnce(&mut Settings),
     {
         let mut guard = self.inner.lock().expect("settings mutex poisoned");
-        change(&mut guard);
-        save(&self.path, &guard)?;
-        Ok(guard.clone())
+        let mut next = guard.clone();
+        change(&mut next);
+        save(&self.path, &next)?;
+        *guard = next.clone();
+        Ok(next)
     }
 }
 
@@ -331,6 +347,13 @@ mod tests {
             recent_projects: paths.iter().map(|p| p.to_string()).collect(),
             ..Settings::default()
         }
+    }
+
+    #[test]
+    fn the_default_theme_id_matches_the_frontend_registry() {
+        // The other half of this pin is in src/lib/appearance.test.ts. If you
+        // are changing the default, change both.
+        assert_eq!(DEFAULT_THEME, "vscode-dark");
     }
 
     #[test]
@@ -542,5 +565,32 @@ mod tests {
         // during update(), not at some later shutdown.
         let reloaded = SettingsStore::load_from(path);
         assert_eq!(reloaded.get().recent_projects, vec!["/repos/one"]);
+    }
+
+    #[test]
+    fn a_failed_write_leaves_the_settings_in_memory_untouched() {
+        // Otherwise the two diverge, and the next *successful* save persists a
+        // change the user was told had failed — the following launch would then
+        // reopen a project that never successfully opened.
+        let dir = tempfile::tempdir().expect("temp dir");
+        // A directory where the file should be: create_dir_all succeeds, and
+        // the rename onto it fails.
+        let path = dir.path().join(FILE_NAME);
+        std::fs::create_dir(&path).expect("occupy the config path");
+
+        let store = SettingsStore::load_from(path);
+        let before = store.get();
+
+        let result = store.update(|s| {
+            s.push_recent("/repos/one");
+            s.last_project = Some("/repos/one".into());
+        });
+
+        assert!(result.is_err(), "writing onto a directory must fail");
+        assert_eq!(
+            store.get(),
+            before,
+            "the failed change must not be committed"
+        );
     }
 }

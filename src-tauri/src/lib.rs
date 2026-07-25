@@ -67,14 +67,29 @@ pub fn run() {
                 .app_config_dir()
                 .unwrap_or_else(|_| std::path::PathBuf::from("."))
                 .join(settings::FILE_NAME);
-            app.manage(SettingsStore::load_from(config_path));
+            let store = SettingsStore::load_from(config_path);
 
-            // The menu is built here with an empty project so the window has one
-            // from the first frame. `bootstrap` asks again with the real
-            // recents; if there are none, that second call is a no-op rather
-            // than a second menubar swap.
+            // Built from the settings just loaded, not from an empty list. The
+            // window then has the right menu on its first frame, and — because
+            // `MenuState` skips an install whose signature is unchanged —
+            // `bootstrap`'s own refresh is a no-op rather than a second menubar
+            // swap on every launch. (GTK logs a warning for each accelerator it
+            // moves, so the swap was visible in the console as well as on
+            // screen.)
+            //
+            // `last_project.is_some()` is a *prediction* of the open state: the
+            // project usually reopens, and when it does not, bootstrap corrects
+            // the menu with the one swap that case deserves.
+            let settings = store.get();
+            let predicted_open = settings.last_project.is_some();
+            app.manage(store);
+
             app.manage(MenuState::default());
-            if let Err(err) = app.state::<MenuState>().refresh(app.handle(), &[], false) {
+            if let Err(err) = app.state::<MenuState>().refresh(
+                app.handle(),
+                &settings.recent_projects,
+                predicted_open,
+            ) {
                 eprintln!("could not build the application menu: {err}");
             }
             Ok(())
@@ -84,7 +99,21 @@ pub fn run() {
                 return;
             };
             if action == menu::MenuAction::Quit {
-                app.exit(0);
+                // Closed, not `app.exit(0)`. Exiting fires neither
+                // `CloseRequested` nor a close on the other windows, and a diff
+                // or merge window's close handler is where a pending save is
+                // flushed — so quitting from the menu with an edit inside the
+                // debounce window would drop it. Closing the main window runs
+                // exactly the path the window's own X button does: kill the
+                // PTYs, close the secondary windows (each flushing on the way
+                // out), and let Tauri exit once none are left.
+                match app.get_webview_window(MAIN_WINDOW_LABEL) {
+                    Some(window) => {
+                        let _ = window.close();
+                    }
+                    // No workspace to close: nothing can be holding a save.
+                    None => app.exit(0),
+                }
                 return;
             }
             // Everything else is driven by the frontend: it owns the confirm

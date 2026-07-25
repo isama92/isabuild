@@ -157,6 +157,13 @@ describe("the theme registry", () => {
   it("includes the default", () => {
     expect(THEMES).toContain(DEFAULT_THEME);
   });
+
+  it("names the default the backend also defaults to", () => {
+    // Duplicated across the language boundary, so it is pinned on both sides:
+    // the other half is `the_default_theme_id_matches_the_frontend_registry`
+    // in src-tauri/src/settings.rs. Changing the default means changing both.
+    expect(DEFAULT_THEME.id).toBe("vscode-dark");
+  });
 });
 
 describe("publishAppearance", () => {

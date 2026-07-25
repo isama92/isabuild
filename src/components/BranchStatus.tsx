@@ -44,6 +44,7 @@ export function BranchStatus() {
   // else about the menu still belongs to this component.
   const menuOpen = useLayoutStore((state) => state.branchMenuOpen);
   const setMenuOpen = useLayoutStore((state) => state.setBranchMenuOpen);
+  const toggleMenu = useLayoutStore((state) => state.toggleBranchMenu);
   const pendingGitAction = useLayoutStore((state) => state.pendingGitAction);
   const clearPendingGitAction = useLayoutStore((state) => state.clearPendingGitAction);
 
@@ -316,7 +317,7 @@ export function BranchStatus() {
           aria-expanded={menuOpen}
           title={branch.upstream ? `${label} → ${branch.upstream}` : label}
           disabled={busy}
-          onClick={() => setMenuOpen(!menuOpen)}
+          onClick={toggleMenu}
         >
           <span aria-hidden="true">{"⑂"}</span>
           <span className="branch-current-name">{label}</span>

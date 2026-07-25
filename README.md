@@ -91,7 +91,7 @@ Each part is an independent plan (see `plans/`), executed in order. A part is do
   window live, a **monospace font** for the terminals and both editors (pick a Nerd Font and
   your shell prompt's icons render), and **rebindable shortcuts** with conflict detection.
   Bundles carry proper metadata and declare `git` as a dependency. Signing is not done: see
-  "Installing a build" below.
+  "Installing a build" under Development.
 
 - [ ] **Part 9 - When there are no changes, on the sidebar the "No changes" text flickers**
 

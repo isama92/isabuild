@@ -155,18 +155,34 @@ pub fn build<R: Runtime>(
         .item(&recent_menu)
         .item(&close_project);
 
-    #[cfg(not(target_os = "macos"))]
-    let quit = MenuItemBuilder::with_id(QUIT, "Exit")
-        .accelerator("CmdOrCtrl+Q")
-        .build(app)?;
+    // Ours, not `PredefinedMenuItem::quit`, on both platforms. The predefined
+    // one is the OS's own terminate and never reaches `on_menu_event`, so it
+    // would skip the window close that gives a diff or merge window its chance
+    // to flush a pending save. See the Quit arm in `lib.rs`.
+    let quit = MenuItemBuilder::with_id(
+        QUIT,
+        if cfg!(target_os = "macos") {
+            "Quit isabuild"
+        } else {
+            "Exit"
+        },
+    )
+    .accelerator("CmdOrCtrl+Q")
+    .build(app)?;
+
     #[cfg(not(target_os = "macos"))]
     let file = file.separator().item(&settings).separator().item(&quit);
     let file = file.build()?;
 
     let menu = MenuBuilder::new(app);
 
+    // Both branches bind `menu` and fall through to one `build()`. Written
+    // symmetrically on purpose: the shape this replaced ended the macOS branch
+    // in a `return` inside a `cfg` block, whose well-typedness Linux CI can
+    // never check, and a macOS-only type error is invisible until someone
+    // builds there.
     #[cfg(target_os = "macos")]
-    {
+    let menu = {
         // The application submenu takes its name from the first submenu's title.
         let app_menu = SubmenuBuilder::new(app, "isabuild")
             .about(None)
@@ -179,7 +195,7 @@ pub fn build<R: Runtime>(
             .hide_others()
             .show_all()
             .separator()
-            .quit()
+            .item(&quit)
             .build()?;
         // Without Edit, Cmd+C/V/X/A stop working in the webview: a custom menu
         // replaces AppKit's default one, taking those responders with it.
@@ -196,11 +212,12 @@ pub fn build<R: Runtime>(
             .minimize()
             .close_window()
             .build()?;
-        let menu = menu.item(&app_menu).item(&file).item(&edit).item(&window);
-        return menu.build();
-    }
+        menu.item(&app_menu).item(&file).item(&edit).item(&window)
+    };
     #[cfg(not(target_os = "macos"))]
-    menu.item(&file).build()
+    let menu = menu.item(&file);
+
+    menu.build()
 }
 
 /// Attach `menu` where the platform expects it. See the module note on why the

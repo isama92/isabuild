@@ -9,6 +9,7 @@
 //! no `libfontconfig1-dev`, and it exposes the `monospaced` flag straight from
 //! the font tables, which is what lets the picker default to mono families.
 
+use std::collections::HashMap;
 use std::sync::OnceLock;
 
 use serde::Serialize;
@@ -51,20 +52,26 @@ pub fn families() -> &'static [FontFamily] {
 /// the flag off an italic or a variable face, and dropping the whole family for
 /// that would hide exactly the Nerd Fonts this setting exists to find.
 fn collect<'a>(faces: impl Iterator<Item = (&'a str, bool)>) -> Vec<FontFamily> {
-    let mut families: Vec<FontFamily> = Vec::new();
+    // Keyed rather than scanned: a machine with a large collection has
+    // thousands of faces, and the linear search this replaces was quadratic in
+    // that. It is cached for the process either way, but there is no reason for
+    // the one scan to be slow.
+    let mut by_name: HashMap<&str, bool> = HashMap::new();
     for (name, monospaced) in faces {
         let name = name.trim();
         if name.is_empty() {
             continue;
         }
-        match families.iter_mut().find(|f| f.name == name) {
-            Some(existing) => existing.monospaced |= monospaced,
-            None => families.push(FontFamily {
-                name: name.to_string(),
-                monospaced,
-            }),
-        }
+        let entry = by_name.entry(name).or_insert(false);
+        *entry |= monospaced;
     }
+    let mut families: Vec<FontFamily> = by_name
+        .into_iter()
+        .map(|(name, monospaced)| FontFamily {
+            name: name.to_string(),
+            monospaced,
+        })
+        .collect();
     // Case-insensitive so the select does not read as two alphabets interleaved.
     families.sort_by_key(|family| family.name.to_lowercase());
     families

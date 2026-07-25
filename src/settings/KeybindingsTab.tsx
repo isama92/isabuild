@@ -44,6 +44,8 @@ export function KeybindingsTab({ settings, save }: KeybindingsTabProps) {
 
   useEffect(() => {
     if (recording === null) return;
+    // Narrowed once, so the listener below needs no non-null assertions.
+    const actionId = recording;
 
     function onKeyDown(event: KeyboardEvent) {
       // Capture phase and always swallowed: while recording, a keystroke is
@@ -71,20 +73,20 @@ export function KeybindingsTab({ settings, save }: KeybindingsTabProps) {
         return;
       }
 
-      const reserved = reservedBy(recording!, accelerator);
+      const reserved = reservedBy(actionId, accelerator);
       if (reserved !== null) {
-        setConflict(`${text} is already taken by ${reserved}. Pick another.`);
+        setConflict(`${text} could clash with ${reserved}. Pick another.`);
         return;
       }
 
-      const clashes = conflictsWith(current, recording!, accelerator);
+      const clashes = conflictsWith(current, actionId, accelerator);
       if (clashes.length > 0) {
         setConflict(`${text} is already ${labelFor(clashes[0])}. Pick another.`);
         return;
       }
 
       persist({
-        keybindings: { ...now.keybindings, [recording!]: text },
+        keybindings: { ...now.keybindings, [actionId]: text },
       });
       stop();
     }

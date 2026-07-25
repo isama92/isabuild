@@ -123,6 +123,17 @@ describe("with a project open", () => {
     expect(screen.getByTestId("pending")).toHaveTextContent("none");
   });
 
+  it("does nothing for the recent entry that is the open project", async () => {
+    // The confirmation promises Claude Code will stop, which is untrue here:
+    // the backend leaves the workspace alone when the root is unchanged.
+    useProjectStore.setState({ recents: [recent(PROJECT.repoRoot)] });
+    await mount();
+    act(() => fire({ action: "open-recent", index: 0 }));
+
+    expect(open).not.toHaveBeenCalled();
+    expect(screen.getByTestId("pending")).toHaveTextContent("none");
+  });
+
   it("asks before switching to a recent project, and remembers which one", async () => {
     await mount();
     act(() => fire({ action: "open-recent", index: 0 }));

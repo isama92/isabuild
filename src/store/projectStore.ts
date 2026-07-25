@@ -119,9 +119,20 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
   open: async (path) => {
     if (get().busy) return;
     set({ busy: true, error: null });
+    const previous = get().project?.repoRoot;
     try {
       const project = await openProject(path);
-      resetForProjectSwitch();
+      // Only when the project actually changed, matching the predicate the
+      // backend uses to decide whether to tear the workspace down.
+      //
+      // Reopening the one already open is the likeliest thing to happen in this
+      // menu: `push_recent` puts the current project at the front, so Open
+      // Recent's first entry *is* it. Resetting anyway would leave the git
+      // store at `initialGitState` with nothing to refill it — `Layout` is
+      // keyed on the repo root, so it does not remount, and `useRepoWatch`
+      // reads once on mount. The branch bar would vanish and the Status panel
+      // would show empty groups until the watcher happened to fire.
+      if (previous !== project.repoRoot) resetForProjectSwitch();
       set({ phase: "open", project, busy: false });
       await get().refreshRecents();
     } catch (cause) {
