@@ -3,6 +3,7 @@
   "separate-pull-requests": false,
   "pull-request-title-pattern": "chore: release ${version}",
   "bump-minor-pre-major": true,
+  "initial-version": "0.1.0",
   "packages": {
     ".": {
       "release-type": "node",
