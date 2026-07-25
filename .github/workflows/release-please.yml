@@ -1,0 +1,104 @@
+name: Release-please
+
+# Versioning is automated, never hand-edited. src-tauri/Cargo.toml is the single
+# source of truth for the app version (tauri.conf.json deliberately has no
+# `version` key, so Tauri reads the manifest).
+#
+# This replaced release-plz, which cannot work for a Tauri app: its `git_only`
+# mode (mandatory here, since isabuild is not on crates.io and there is no
+# registry baseline to diff against) runs `cargo package` with verification,
+# hardcoded with no `--no-verify` escape. That compile can never succeed —
+# `cargo package` only includes files under src-tauri/, so the gitignored root
+# ../dist is absent and `generate_context!()` panics. Cargo cannot include files
+# above the package root, so committing dist/ would not rescue it either.
+# release-please computes versions from git history alone and never runs cargo.
+on:
+  push:
+    branches: [main]
+
+# These govern `secrets.GITHUB_TOKEN`, which nothing in this job actually uses —
+# every call below authenticates with the PAT instead. They are kept because
+# release-please-action documents them as required, so the job stays correct if a
+# step that does use the default token is ever added. The authority that matters
+# is the PAT's own scopes: see "Releases" in README.md.
+permissions:
+  contents: write
+  issues: write
+  pull-requests: write
+
+# Never cancel a release mid-flight.
+concurrency:
+  group: release-please-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  release-please:
+    name: Release-please
+    runs-on: ubuntu-22.04
+    timeout-minutes: 15
+    steps:
+      # No checkout needed for this step: the action reads the config, the
+      # manifest and the git history through the GitHub API.
+      #
+      # The token is the PAT, not GITHUB_TOKEN, for the same reason release-plz
+      # needed it: a release created by GITHUB_TOKEN fires no `release` event, so
+      # release.yml would never run and every release would ship with no
+      # installers attached. The secret name is inherited from the release-plz
+      # setup rather than renamed, so no repository secret has to change.
+      - name: Run release-please
+        id: release
+        uses: googleapis/release-please-action@45996ed1f6d02564a971a2fa1b5860e934307cf7 # v5.0.0
+        with:
+          token: ${{ secrets.RELEASE_PLZ_TOKEN }}
+          config-file: release-please-config.json
+          manifest-file: .release-please-manifest.json
+
+      # release-please bumps src-tauri/Cargo.toml (via extra-files) but knows
+      # nothing about src-tauri/Cargo.lock, which records the same version. Left
+      # stale, the `--locked` steps in ci.yml and cross-os.yml fail on main after
+      # the release PR merges, with "cannot update the lock file".
+      #
+      # `cargo update --workspace` re-resolves only workspace members, so the
+      # diff is exactly the one version line and no dependency drifts into the
+      # release PR. It must NOT be `--offline`: the runner has no warm registry
+      # index, and re-resolution reads the index even when the result is
+      # unchanged, so --offline fails the step outright.
+      #
+      # release-please force-rewrites its PR branch from main whenever it updates
+      # the PR, discarding this commit — but a rewrite and prs_created == 'true'
+      # always co-occur, so this step re-adds it on the same run.
+      - name: Checkout for the Cargo.lock sync
+        if: steps.release.outputs.prs_created == 'true'
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          # The PAT, kept in the local git config, so the extra commit can be
+          # pushed onto release-please's PR branch.
+          token: ${{ secrets.RELEASE_PLZ_TOKEN }}
+          persist-credentials: true
+
+      # Pinned like every other cargo-running job here. `cargo update` rewrites
+      # the whole lockfile in the writing cargo's format, so an unpinned runner
+      # image could add lock-format churn to a release PR.
+      - name: Install Rust toolchain
+        if: steps.release.outputs.prs_created == 'true'
+        uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30 # stable
+        with:
+          toolchain: stable
+
+      - name: Sync Cargo.lock into the release PR
+        if: steps.release.outputs.prs_created == 'true'
+        env:
+          GITHUB_TOKEN: ${{ secrets.RELEASE_PLZ_TOKEN }}
+          PR: ${{ steps.release.outputs.pr }}
+        run: |
+          set -euo pipefail
+          gh pr checkout "$(jq -r .number <<<"$PR")"
+          cargo update --workspace --manifest-path src-tauri/Cargo.toml
+          if git diff --quiet; then
+            echo "Cargo.lock already in sync"
+          else
+            git config user.name 'github-actions[bot]'
+            git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+            git commit -am "chore: sync Cargo.lock"
+            git push
+          fi

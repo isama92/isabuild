@@ -1,7 +1,7 @@
 name: Release
 
 # Builds the installers for a published release and attaches them to it.
-# Triggered by the release release-plz publishes, which is why release-plz.yml
+# Triggered by the release release-please publishes, which is why release-please.yml
 # must use a PAT: a release created by GITHUB_TOKEN fires no event, and this
 # workflow would never run.
 on:
@@ -43,7 +43,7 @@ jobs:
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           # Build the tag, not the branch tip: the tag's tree carries the
-          # release-plz version bump, so the installer filenames and the app's
+          # release-please version bump, so the installer filenames and the app's
           # own version are the released ones.
           ref: ${{ github.event.release.tag_name }}
 

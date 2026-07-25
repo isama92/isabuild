@@ -5,11 +5,13 @@
 ## Release note
 
 The **PR title** must be a Conventional Commit: on squash-merge it becomes the
-commit message that release-plz reads to compute the next version.
+commit message that release-please reads to compute the next version.
 
 - `feat: ...` bumps the minor version
 - `fix: ...` bumps the patch version
-- `feat!: ...` or a `BREAKING CHANGE:` footer bumps the major version
+- `feat!: ...` or a `BREAKING CHANGE:` footer bumps the **minor** version while
+  the app is pre-1.0 (`bump-minor-pre-major`), not the major. 1.0.0 is cut
+  deliberately, never by a commit message.
 - `chore: `, `docs: `, `refactor: `, `test: `, `ci: `, etc. do not cut a release
   on their own
 
@@ -30,6 +32,6 @@ cosmetic — it is never read when computing the version.
 - [ ] Repo changes arrive through the `notify` watcher, not a new polling timer
 - [ ] A new window label pattern has its own file in `src-tauri/capabilities/`
 - [ ] No secrets, credentials or real hostnames in code, tests or fixtures
-- [ ] No version numbers edited by hand — release-plz owns them
+- [ ] No version numbers edited by hand — release-please owns them
 
 Verified on: <!-- Linux / macOS / Windows — delete any you could not test -->

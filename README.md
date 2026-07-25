@@ -68,25 +68,31 @@ in this repository.
 
 ### Releases
 
-Versioning and releases are automated by [release-plz](https://release-plz.dev), driven by
-Conventional Commit PR titles. Nobody edits a version by hand.
+Versioning and releases are automated by
+[release-please](https://github.com/googleapis/release-please), driven by Conventional Commit
+PR titles. Nobody edits a version by hand.
 
 1. A PR merges to `main`. Because PRs are squash-merged, its `feat:`/`fix:`/… title becomes
-   the commit release-plz reads to pick the next version.
-2. `release-plz.yml` opens a `chore: release X.Y.Z` PR bumping `src-tauri/Cargo.toml`,
+   the commit release-please reads to pick the next version.
+2. `release-please.yml` opens a `chore: release X.Y.Z` PR bumping `src-tauri/Cargo.toml`,
    `src-tauri/Cargo.lock`, `CHANGELOG.md` and the npm pair. Review it like any other PR.
 3. Merging it tags `vX.Y.Z` and publishes the GitHub release, which triggers `release.yml`
    to build the installers above and attach them.
 
 `src-tauri/Cargo.toml` is the single source of truth for the version: `tauri.conf.json` has
 no `version` key, so Tauri reads the manifest, and a test in `src-tauri/src/lib.rs` fails if
-that ever stops being true.
+that ever stops being true. `.release-please-manifest.json` records the last released
+version and should not be hand-edited.
+
+While the app is pre-1.0 a breaking change bumps the **minor** version, not the major, so
+1.0.0 has to be cut deliberately rather than by a commit message.
 
 This needs one repository secret, **`RELEASE_PLZ_TOKEN`** — a fine-grained PAT (or GitHub App
-token) with *Contents: read/write* and *Pull requests: read/write*. It cannot be replaced by
-the built-in `GITHUB_TOKEN`: a release created by that token fires no `release` event, so
-`release.yml` would never run and every release would ship with no installers. Repository
-settings must also allow GitHub Actions to create pull requests.
+token) with *Contents: read/write* and *Pull requests: read/write*; grant *Issues: read/write*
+too if label creation on the release PR fails. It cannot be replaced by the built-in
+`GITHUB_TOKEN`: a release created by that token fires no `release` event, so `release.yml`
+would never run and every release would ship with no installers. Because every call runs
+through the PAT, the workflow's own `permissions:` block is not what authorises any of this.
 
 ## Known limitations
 
