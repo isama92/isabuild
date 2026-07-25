@@ -16,8 +16,11 @@ on:
   push:
     branches: [main]
 
-# `issues: write` is required by release-please-action and was not needed by
-# release-plz; without it the action fails when it labels the release PR.
+# These govern `secrets.GITHUB_TOKEN`, which nothing in this job actually uses —
+# every call below authenticates with the PAT instead. They are kept because
+# release-please-action documents them as required, so the job stays correct if a
+# step that does use the default token is ever added. The authority that matters
+# is the PAT's own scopes: see "Releases" in README.md.
 permissions:
   contents: write
   issues: write
@@ -34,8 +37,8 @@ jobs:
     runs-on: ubuntu-22.04
     timeout-minutes: 15
     steps:
-      # No checkout step: the action reads the config, the manifest and the git
-      # history through the GitHub API.
+      # No checkout needed for this step: the action reads the config, the
+      # manifest and the git history through the GitHub API.
       #
       # The token is the PAT, not GITHUB_TOKEN, for the same reason release-plz
       # needed it: a release created by GITHUB_TOKEN fires no `release` event, so
@@ -50,16 +53,20 @@ jobs:
           config-file: release-please-config.json
           manifest-file: .release-please-manifest.json
 
-      # release-please bumps src-tauri/Cargo.toml (extra-files) but knows nothing
-      # about src-tauri/Cargo.lock, which records the same version. Left stale,
-      # every `--locked` invocation in ci.yml, cross-os.yml and release.yml fails
-      # with "cannot update the lock file because --locked was passed" — verified
-      # locally, exit 101.
+      # release-please bumps src-tauri/Cargo.toml (via extra-files) but knows
+      # nothing about src-tauri/Cargo.lock, which records the same version. Left
+      # stale, the `--locked` steps in ci.yml and cross-os.yml fail on main after
+      # the release PR merges, with "cannot update the lock file".
       #
       # `cargo update --workspace` re-resolves only workspace members, so the
       # diff is exactly the one version line and no dependency drifts into the
-      # release PR. --offline keeps it that way; it needs no registry access
-      # because only the local manifest is re-read.
+      # release PR. It must NOT be `--offline`: the runner has no warm registry
+      # index, and re-resolution reads the index even when the result is
+      # unchanged, so --offline fails the step outright.
+      #
+      # release-please force-rewrites its PR branch from main whenever it updates
+      # the PR, discarding this commit — but a rewrite and prs_created == 'true'
+      # always co-occur, so this step re-adds it on the same run.
       - name: Checkout for the Cargo.lock sync
         if: steps.release.outputs.prs_created == 'true'
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
@@ -69,6 +76,15 @@ jobs:
           token: ${{ secrets.RELEASE_PLZ_TOKEN }}
           persist-credentials: true
 
+      # Pinned like every other cargo-running job here. `cargo update` rewrites
+      # the whole lockfile in the writing cargo's format, so an unpinned runner
+      # image could add lock-format churn to a release PR.
+      - name: Install Rust toolchain
+        if: steps.release.outputs.prs_created == 'true'
+        uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30 # stable
+        with:
+          toolchain: stable
+
       - name: Sync Cargo.lock into the release PR
         if: steps.release.outputs.prs_created == 'true'
         env:
@@ -77,7 +93,7 @@ jobs:
         run: |
           set -euo pipefail
           gh pr checkout "$(jq -r .number <<<"$PR")"
-          cargo update --workspace --offline --manifest-path src-tauri/Cargo.toml
+          cargo update --workspace --manifest-path src-tauri/Cargo.toml
           if git diff --quiet; then
             echo "Cargo.lock already in sync"
           else

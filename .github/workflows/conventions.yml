@@ -22,7 +22,7 @@ jobs:
     timeout-minutes: 5
     if: github.event.pull_request.draft == false
     steps:
-      # The PR title is what a squash-merge lands on main, and release-plz reads
+      # The PR title is what a squash-merge lands on main, and release-please reads
       # those Conventional Commit messages to compute the next version. Enforce
       # the format so version bumps are reliable.
       - name: Validate Conventional Commit title

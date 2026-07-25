@@ -209,7 +209,7 @@ pub fn run() {
 #[cfg(test)]
 mod tests {
     /// `tauri.conf.json` deliberately carries no `version` key, so Tauri falls
-    /// back to `src-tauri/Cargo.toml` — the one file release-plz bumps.
+    /// back to `src-tauri/Cargo.toml` — the one file release-please bumps.
     ///
     /// Fails if anyone re-adds a hardcoded version to the config: two sources of
     /// truth drift silently, and the symptom surfaces late and confusingly as an
@@ -230,6 +230,31 @@ mod tests {
         assert_eq!(
             context.package_info().version.to_string(),
             env!("CARGO_PKG_VERSION")
+        );
+    }
+
+    /// release-please bumps `src-tauri/Cargo.toml` through a *generic* TOML
+    /// updater, and a JSONPath that stops matching does not fail the release:
+    /// `GenericToml` logs a warning and returns the file unchanged. On its own
+    /// that would tag a version and ship installers built from the old one, with
+    /// every workflow green.
+    ///
+    /// `package.json` is bumped by a different, native updater, so comparing the
+    /// two catches the silent no-op. Anything that restructures `[package]`
+    /// (a rename, `version.workspace = true`, a move into a real workspace)
+    /// fails here rather than in a published release.
+    #[test]
+    fn package_json_version_matches_the_cargo_manifest() {
+        let package_json: serde_json::Value =
+            serde_json::from_str(include_str!("../../package.json"))
+                .expect("package.json is valid JSON");
+        assert_eq!(
+            package_json["version"]
+                .as_str()
+                .expect("package.json has a string version"),
+            env!("CARGO_PKG_VERSION"),
+            "package.json and src-tauri/Cargo.toml disagree: release-please's \
+             Cargo.toml updater may have silently stopped matching"
         );
     }
 }
