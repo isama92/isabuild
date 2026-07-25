@@ -11,7 +11,10 @@ body,
 }
 
 body {
-  background: #1e1e1e;
+  /* Literal fallback, the one in the app: the entry module that writes the
+     custom properties is deferred, so without it the webview paints its own
+     white default for a frame before the theme lands. */
+  background: var(--ib-bg, #1e1e1e);
 }
 
 .settings-window {
@@ -19,13 +22,13 @@ body {
   height: 100%;
   overflow-y: auto;
   padding: 20px 24px 28px;
-  background: #1e1e1e;
-  color: #cccccc;
+  background: var(--ib-bg);
+  color: var(--ib-text);
   font: 13px/1.5 system-ui, sans-serif;
 }
 
 .settings-window--loading {
-  color: #8a8a8a;
+  color: var(--ib-text-dim);
 }
 
 .settings-title {
@@ -41,12 +44,12 @@ body {
 .settings-section-title {
   margin: 0 0 12px;
   padding-bottom: 6px;
-  border-bottom: 1px solid #333;
+  border-bottom: 1px solid var(--ib-border);
   font-size: 13px;
   font-weight: 600;
   text-transform: uppercase;
   letter-spacing: 0.06em;
-  color: #8a8a8a;
+  color: var(--ib-text-dim);
 }
 
 .settings-field {
@@ -69,10 +72,10 @@ body {
 .settings-number {
   box-sizing: border-box;
   padding: 5px 8px;
-  border: 1px solid #3c3c3c;
+  border: 1px solid var(--ib-border-strong);
   border-radius: 3px;
-  background: #252526;
-  color: #cccccc;
+  background: var(--ib-bg-chrome);
+  color: var(--ib-text);
   font: inherit;
 }
 
@@ -87,23 +90,23 @@ body {
 
 .settings-select:focus-visible,
 .settings-number:focus-visible {
-  outline: 1px solid #2f6feb;
+  outline: 1px solid var(--ib-focus);
   outline-offset: -1px;
 }
 
 .settings-select:disabled {
-  color: #8a8a8a;
+  color: var(--ib-text-dim);
 }
 
 .settings-hint {
   margin: 5px 0 0;
-  color: #8a8a8a;
+  color: var(--ib-text-dim);
   font-size: 12px;
 }
 
 .settings-error {
   margin: 6px 0 0;
-  color: #f14c4c;
+  color: var(--ib-deleted);
   font-size: 12px;
 }
 
@@ -112,9 +115,9 @@ body {
 .settings-preview {
   margin-top: 12px;
   padding: 10px 12px;
-  border: 1px solid #333;
+  border: 1px solid var(--ib-border);
   border-radius: 3px;
-  background: #252526;
+  background: var(--ib-bg-chrome);
   font-family: var(--ib-mono-family, monospace);
   font-size: var(--ib-mono-size, 14px);
   line-height: 1.5;

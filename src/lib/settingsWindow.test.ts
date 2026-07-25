@@ -1,6 +1,8 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { WebviewWindow } from "@tauri-apps/api/webviewWindow";
 import { openSettingsWindow, SETTINGS_WINDOW_LABEL } from "./settingsWindow";
+import { publishAppearance, resetAppearance } from "./appearance";
+import { DEFAULT_THEME, themeById } from "../theme/themes";
 
 const created: { label: string; options: Record<string, unknown> }[] = [];
 let failWith: string | null = null;
@@ -35,6 +37,7 @@ beforeEach(() => {
   created.length = 0;
   failWith = null;
   getByLabelMock.mockResolvedValue(null);
+  resetAppearance();
 });
 
 describe("openSettingsWindow", () => {
@@ -45,7 +48,23 @@ describe("openSettingsWindow", () => {
 
     expect(created).toHaveLength(1);
     expect(created[0].label).toBe(SETTINGS_WINDOW_LABEL);
-    expect(created[0].options.url).toBe("settings.html");
+    expect(created[0].options.url).toMatch(/^settings\.html\?/);
+  });
+
+  it("tells the new window which theme to paint before it can read the settings", async () => {
+    publishAppearance(document.createElement("div"), {
+      fontFamily: "x",
+      fontSize: 14,
+      theme: themeById("vscode-light"),
+    });
+    await openSettingsWindow();
+
+    expect(String(created[0].options.url)).toContain("theme=vscode-light");
+  });
+
+  it("names the default theme when nothing has been published yet", async () => {
+    await openSettingsWindow();
+    expect(String(created[0].options.url)).toContain(`theme=${DEFAULT_THEME.id}`);
   });
 
   it("focuses the window already open instead of creating a second", async () => {

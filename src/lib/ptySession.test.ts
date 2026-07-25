@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { invoke } from "@tauri-apps/api/core";
 import { attach, restart } from "./ptySession";
 import { publishAppearance, resetAppearance } from "./appearance";
+import { DEFAULT_THEME, themeById } from "../theme/themes";
 import { bytesToBase64 } from "./base64";
 
 const hoisted = vi.hoisted(() => {
@@ -361,6 +362,7 @@ describe("the font setting", () => {
     publishAppearance(document.createElement("div"), {
       fontFamily: "'Fira Code'",
       fontSize: 17,
+      theme: DEFAULT_THEME,
     });
 
     for (const term of hoisted.terminals) {
@@ -382,6 +384,7 @@ describe("the font setting", () => {
     publishAppearance(document.createElement("div"), {
       fontFamily: "'Fira Code'",
       fontSize: 17,
+      theme: DEFAULT_THEME,
     });
 
     // Asserted by id rather than by count: the module map still holds the
@@ -399,6 +402,7 @@ describe("the font setting", () => {
     publishAppearance(document.createElement("div"), {
       fontFamily: "'Fira Code'",
       fontSize: 17,
+      theme: DEFAULT_THEME,
     });
     mockBackend();
     attach(container, { id: nextId() });
@@ -407,6 +411,32 @@ describe("the font setting", () => {
     expect(hoisted.terminals.at(-1)!.options).toMatchObject({
       fontFamily: "'Fira Code'",
       fontSize: 17,
+    });
+    // xterm's theme, not ours: the palette is translated into the 16 ANSI slots
+    // plus the surface colours it draws itself.
+    expect(hoisted.terminals.at(-1)!.options.theme).toMatchObject({
+      background: DEFAULT_THEME.tokens.bg,
+      brightGreen: DEFAULT_THEME.tokens.ansiBrightGreen,
+    });
+  });
+
+  it("repaints every live terminal when the theme changes", async () => {
+    mockBackend();
+    attach(container, { id: nextId() });
+    await flush();
+
+    const light = themeById("vscode-light");
+    publishAppearance(document.createElement("div"), {
+      fontFamily: "'Fira Code'",
+      fontSize: 17,
+      theme: light,
+    });
+
+    // Including the ANSI palette: the shell picks its own colours from it, so
+    // a light background under a dark palette leaves an unreadable prompt.
+    expect(hoisted.terminals.at(-1)!.options.theme).toMatchObject({
+      background: light.tokens.bg,
+      green: light.tokens.ansiGreen,
     });
   });
 });

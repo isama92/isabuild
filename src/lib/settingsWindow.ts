@@ -3,7 +3,7 @@
 // ever one settings window, so the label is the constant `settings` rather than
 // a hash, and reopening focuses the one already there.
 
-import { openFileWindow } from "./fileWindow";
+import { openFileWindow, withTheme } from "./fileWindow";
 
 /** Must match the `windows` pattern in src-tauri/capabilities/settings.json. */
 export const SETTINGS_WINDOW_LABEL = "settings";
@@ -11,7 +11,7 @@ export const SETTINGS_WINDOW_LABEL = "settings";
 export function openSettingsWindow(): Promise<void> {
   return openFileWindow({
     label: SETTINGS_WINDOW_LABEL,
-    url: "settings.html",
+    url: `settings.html?${withTheme(new URLSearchParams()).toString()}`,
     title: "isabuild Settings",
     subject: "the settings window",
     width: 760,

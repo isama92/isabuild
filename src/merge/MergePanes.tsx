@@ -43,7 +43,8 @@ import {
 import { defaultKeymap, history, historyKeymap } from "@codemirror/commands";
 import { languages } from "@codemirror/language-data";
 import { languageForPath } from "../lib/cmLanguage";
-import { onAppearance } from "../lib/appearance";
+import { currentAppearance, onAppearance } from "../lib/appearance";
+import { DEFAULT_THEME } from "../theme/themes";
 import { mirrorScrollTop, worthScrolling } from "../lib/paneScroll";
 import {
   actionsFor,
@@ -61,7 +62,7 @@ import {
   type ChunkSide,
   type TrackedChunk,
 } from "../lib/mergeChunks";
-import { paneExtensions, readOnlyExtensions } from "./codemirrorSetup";
+import { paneExtensions, readOnlyExtensions, themeTransaction } from "./codemirrorSetup";
 import type { ConflictStages } from "../lib/gitMerge";
 
 export interface MergePanesProps {
@@ -296,7 +297,7 @@ export function MergePanes({ path, stages, value, onChange, busy }: MergePanesPr
         state: EditorState.create({
           doc,
           extensions: [
-            ...paneExtensions(),
+            ...paneExtensions(currentAppearance()?.theme ?? DEFAULT_THEME),
             ...readOnlyExtensions(),
             sideDecorationField(model, side),
             gutter({
@@ -327,7 +328,7 @@ export function MergePanes({ path, stages, value, onChange, busy }: MergePanesPr
       state: EditorState.create({
         doc: initial.value,
         extensions: [
-          ...paneExtensions(),
+          ...paneExtensions(currentAppearance()?.theme ?? DEFAULT_THEME),
           field,
           markerHighlight,
           history(),
@@ -377,16 +378,25 @@ export function MergePanes({ path, stages, value, onChange, busy }: MergePanesPr
     };
   }, [apply, mirrorFrom]);
 
-  // The font arrives through CSS custom properties (see codemirrorSetup's
-  // THEME), so no reconfiguration is needed — but CodeMirror caches the
+  // Appearance changes reach the panes two different ways.
+  //
+  // The *font* arrives through CSS custom properties (see codemirrorSetup's
+  // theme), so it needs no transaction at all — but CodeMirror caches the
   // character width it measured at startup, and a stale cache puts the cursor,
-  // the chunk gutter arrows and the scroll sync at the wrong offsets. Asking
-  // each view to re-measure is the whole fix.
+  // the chunk gutter arrows and the scroll sync at the wrong offsets, so each
+  // view is asked to re-measure.
+  //
+  // The *colours* cannot come from CSS: the highlight style is compiled into
+  // CodeMirror's own stylesheet and the chunk tints are theme rules, so both
+  // compartments are reconfigured in one transaction per view.
   useEffect(
     () =>
-      onAppearance(() => {
+      onAppearance((appearance) => {
+        const spec = themeTransaction(appearance.theme);
         for (const view of Object.values(views.current)) {
-          view?.requestMeasure();
+          if (!view) continue;
+          view.dispatch(spec);
+          view.requestMeasure();
         }
       }),
     [],

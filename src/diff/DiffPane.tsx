@@ -17,7 +17,7 @@ import { useEffect, useMemo, useRef } from "react";
 import * as monaco from "monaco-editor/editor/editor.api";
 import {
   computeMarkers,
-  MARKER_COLORS,
+  markerColors,
   type DiffMarker,
   type DiffSide,
 } from "../lib/diffMarkers";
@@ -28,7 +28,8 @@ import {
   onAppearance,
   type Appearance,
 } from "../lib/appearance";
-import { configureMonaco, DIFF_THEME } from "./monacoSetup";
+import { DEFAULT_THEME, type Theme } from "../theme/themes";
+import { configureMonaco, monacoThemeName } from "./monacoSetup";
 
 /**
  * The font half of Monaco's options. `null` (no settings read yet) resolves to
@@ -40,6 +41,15 @@ function monacoFontOptions(appearance: Appearance | null): monaco.editor.IEditor
     fontFamily: appearance?.fontFamily ?? DEFAULT_MONO_STACK,
     fontSize: appearance?.fontSize ?? 13,
   };
+}
+
+/**
+ * Monaco's theme is set globally, not per editor, so it is `setTheme` rather
+ * than an option on the instance. Both panes of the diff follow it at once,
+ * which is what we want.
+ */
+function applyMonacoTheme(appearance: Appearance | null): void {
+  monaco.editor.setTheme(monacoThemeName(appearance?.theme ?? DEFAULT_THEME));
 }
 
 export interface DiffPaneProps {
@@ -70,7 +80,9 @@ export interface DiffPaneProps {
 function toDecorations(
   markers: readonly DiffMarker[],
   side: DiffSide,
+  theme: Theme,
 ): monaco.editor.IModelDeltaDecoration[] {
+  const colors = markerColors(theme);
   return markers
     .filter((marker) => marker.side === side)
     .map((marker) => ({
@@ -78,7 +90,7 @@ function toDecorations(
       options: {
         description: `isabuild-diff-${marker.kind}`,
         overviewRuler: {
-          color: MARKER_COLORS[marker.kind],
+          color: colors[marker.kind],
           position: monaco.editor.OverviewRulerLane.Full,
         },
       },
@@ -130,7 +142,7 @@ export function DiffPane({
     modelsRef.current = { original, modified };
 
     const editor = monaco.editor.createDiffEditor(container, {
-      theme: DIFF_THEME,
+      theme: monacoThemeName(currentAppearance()?.theme ?? DEFAULT_THEME),
       // The left side is a git blob: it can be read, never written.
       originalEditable: false,
       readOnly: !seed.rightEditable,
@@ -159,18 +171,28 @@ export function DiffPane({
     editor.setModel({ original, modified });
     editorRef.current = editor;
 
-    const stopFollowingAppearance = onAppearance((appearance) => {
-      editor.updateOptions(monacoFontOptions(appearance));
-    });
-
     const originalMarks = editor.getOriginalEditor().createDecorationsCollection();
     const modifiedMarks = editor.getModifiedEditor().createDecorationsCollection();
+    /** Re-mark the scrollbar. Called on a new diff *and* on a theme change:
+     *  Monaco stores the colour it was handed, so a repaint is not enough. */
+    const remark = () => {
+      const theme = currentAppearance()?.theme ?? DEFAULT_THEME;
+      const markers = computeMarkers(editor.getLineChanges());
+      originalMarks.set(toDecorations(markers, "original", theme));
+      modifiedMarks.set(toDecorations(markers, "modified", theme));
+    };
+
+    // Declared after `remark`, not before: `onAppearance` calls its listener
+    // immediately when a value has already been published, so a subscription
+    // above this point would hit the temporal dead zone on the very first call.
+    const stopFollowingAppearance = onAppearance((appearance) => {
+      editor.updateOptions(monacoFontOptions(appearance));
+      applyMonacoTheme(appearance);
+      remark();
+    });
+
     const disposables: monaco.IDisposable[] = [
-      editor.onDidUpdateDiff(() => {
-        const markers = computeMarkers(editor.getLineChanges());
-        originalMarks.set(toDecorations(markers, "original"));
-        modifiedMarks.set(toDecorations(markers, "modified"));
-      }),
+      editor.onDidUpdateDiff(remark),
       // Fires for typing, for a revert-arrow click, and for our own setValue;
       // the parent decides which of those is worth saving.
       modified.onDidChangeContent(() => {

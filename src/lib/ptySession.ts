@@ -16,6 +16,41 @@ import { FitAddon } from "@xterm/addon-fit";
 import { WebglAddon } from "@xterm/addon-webgl";
 import { base64ToBytes, stringToBase64 } from "./base64";
 import { currentAppearance, DEFAULT_MONO_STACK, onAppearance } from "./appearance";
+import { DEFAULT_THEME, type Theme } from "../theme/themes";
+
+/**
+ * xterm's theme, from the app's tokens.
+ *
+ * The 16 ANSI entries matter as much as the background: the shell picks its own
+ * colours from that palette, so a light theme with the dark palette still under
+ * it leaves a prompt in colours chosen to sit on black.
+ */
+function terminalTheme(theme: Theme) {
+  const t = theme.tokens;
+  return {
+    background: t.bg,
+    foreground: t.textBright,
+    cursor: t.textBright,
+    cursorAccent: t.bg,
+    selectionBackground: t.selection,
+    black: t.ansiBlack,
+    red: t.ansiRed,
+    green: t.ansiGreen,
+    yellow: t.ansiYellow,
+    blue: t.ansiBlue,
+    magenta: t.ansiMagenta,
+    cyan: t.ansiCyan,
+    white: t.ansiWhite,
+    brightBlack: t.ansiBrightBlack,
+    brightRed: t.ansiBrightRed,
+    brightGreen: t.ansiBrightGreen,
+    brightYellow: t.ansiBrightYellow,
+    brightBlue: t.ansiBrightBlue,
+    brightMagenta: t.ansiBrightMagenta,
+    brightCyan: t.ansiBrightCyan,
+    brightWhite: t.ansiBrightWhite,
+  };
+}
 
 export interface PtyExitInfo {
   exitCode: number;
@@ -66,11 +101,7 @@ function createEntry(): Entry {
     fontFamily: appearance?.fontFamily ?? DEFAULT_MONO_STACK,
     fontSize: appearance?.fontSize ?? 14,
     scrollback: 5000,
-    theme: {
-      background: "#1e1e1e",
-      foreground: "#d4d4d4",
-      cursor: "#d4d4d4",
-    },
+    theme: terminalTheme(appearance?.theme ?? DEFAULT_THEME),
   });
   const fit = new FitAddon();
   term.loadAddon(fit);
@@ -281,6 +312,9 @@ onAppearance((appearance) => {
   for (const [id, entry] of entries) {
     entry.term.options.fontFamily = appearance.fontFamily;
     entry.term.options.fontSize = appearance.fontSize;
+    // Repaints the whole buffer, including scrollback already written in the
+    // previous palette: xterm stores cells by ANSI index, not by colour.
+    entry.term.options.theme = terminalTheme(appearance.theme);
     // Only meaningful once the terminal is in the DOM; FitAddon throws on a
     // detached element, and an unopened terminal has nothing to measure.
     if (!entry.term.element) continue;

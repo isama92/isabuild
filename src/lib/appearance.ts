@@ -7,6 +7,7 @@
 // editor/terminal modules subscribe to. Both come from the same resolve step,
 // so they can never disagree.
 
+import { themeById, type Theme } from "../theme/themes";
 import type { Settings } from "./settings";
 
 /**
@@ -25,6 +26,7 @@ export interface Appearance {
   /** Ready for CSS `font-family`, xterm and both editors. */
   fontFamily: string;
   fontSize: number;
+  theme: Theme;
 }
 
 /**
@@ -33,6 +35,16 @@ export interface Appearance {
  */
 export const FONT_FAMILY_VAR = "--ib-mono-family";
 export const FONT_SIZE_VAR = "--ib-mono-size";
+
+/**
+ * CSS custom property for a theme token: `bgChrome` becomes `--ib-bg-chrome`.
+ *
+ * Derived rather than listed, so a token added to `ThemeTokens` is usable in
+ * CSS immediately and there is no second list to keep in step.
+ */
+export function tokenVar(name: string): string {
+  return `--ib-${name.replace(/[A-Z]/g, (upper) => `-${upper.toLowerCase()}`)}`;
+}
 
 /**
  * Quote a chosen family so a name with spaces (almost every Nerd Font:
@@ -57,13 +69,25 @@ export function resolveAppearance(settings: Settings): Appearance {
   return {
     fontFamily: chosen === "" ? DEFAULT_MONO_STACK : `${quoteFamily(chosen)}, ${DEFAULT_MONO_STACK}`,
     fontSize: settings.fontSize,
+    theme: themeById(settings.theme),
   };
 }
 
-/** Write the appearance onto an element's inline custom properties. */
+/**
+ * Write the appearance onto an element's inline custom properties.
+ *
+ * Also sets `data-theme` to the theme id. Nothing in the app styles on it
+ * today, since every colour is a token, but it is the escape hatch for the one
+ * rule a future theme needs that cannot be expressed as a colour, and it makes
+ * the active theme visible when inspecting the DOM.
+ */
 export function applyAppearance(root: HTMLElement, appearance: Appearance): void {
   root.style.setProperty(FONT_FAMILY_VAR, appearance.fontFamily);
   root.style.setProperty(FONT_SIZE_VAR, `${appearance.fontSize}px`);
+  for (const [name, value] of Object.entries(appearance.theme.tokens)) {
+    root.style.setProperty(tokenVar(name), value);
+  }
+  root.dataset.theme = appearance.theme.id;
 }
 
 // --- Subscribers -----------------------------------------------------------

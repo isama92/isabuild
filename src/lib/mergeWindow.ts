@@ -7,7 +7,7 @@
 // and Part 7 replaces this one's single pane with a 3-pane CodeMirror editor
 // without touching that.
 
-import { fileWindowLabel, openFileWindow } from "./fileWindow";
+import { fileWindowLabel, openFileWindow, withTheme } from "./fileWindow";
 
 export interface MergeTarget {
   /** Repository root, as resolved by `git_status`. */
@@ -26,7 +26,7 @@ export function mergeWindowLabel(target: MergeTarget): string {
 /** URL for the merge document, carrying its target in the query string. */
 export function mergeWindowUrl(target: MergeTarget): string {
   const params = new URLSearchParams({ repo: target.repoRoot, path: target.path });
-  return `merge.html?${params.toString()}`;
+  return `merge.html?${withTheme(params).toString()}`;
 }
 
 /**

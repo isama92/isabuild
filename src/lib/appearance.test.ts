@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   applyAppearance,
+  type Appearance,
   currentAppearance,
   DEFAULT_MONO_STACK,
   FONT_FAMILY_VAR,
@@ -9,8 +10,10 @@ import {
   publishAppearance,
   resetAppearance,
   resolveAppearance,
+  tokenVar,
 } from "./appearance";
 import type { Settings } from "./settings";
+import { DEFAULT_THEME, themeById, THEMES } from "../theme/themes";
 
 function settings(overrides: Partial<Settings> = {}): Settings {
   return {
@@ -29,7 +32,7 @@ function settings(overrides: Partial<Settings> = {}): Settings {
 const subscriptions: (() => void)[] = [];
 
 /** Subscribe and register the unsubscribe for cleanup. */
-function subscribe(listener: (appearance: { fontFamily: string; fontSize: number }) => void) {
+function subscribe(listener: (appearance: Appearance) => void) {
   subscriptions.push(onAppearance(listener));
 }
 
@@ -75,12 +78,84 @@ describe("resolveAppearance", () => {
   });
 });
 
+describe("resolveAppearance theme", () => {
+  it("resolves the stored id to its theme", () => {
+    expect(resolveAppearance(settings({ theme: "vscode-light" })).theme.id).toBe("vscode-light");
+  });
+
+  it("falls back to the default for a theme id we do not have", () => {
+    // A hand-edited config, or a downgrade. Falling back beats not painting.
+    expect(resolveAppearance(settings({ theme: "solarized-mist" })).theme).toBe(DEFAULT_THEME);
+  });
+});
+
 describe("applyAppearance", () => {
-  it("writes both custom properties in px", () => {
+  it("writes both font properties, in px", () => {
     const root = document.createElement("div");
-    applyAppearance(root, { fontFamily: "'Fira Code'", fontSize: 16 });
+    applyAppearance(root, { fontFamily: "'Fira Code'", fontSize: 16, theme: DEFAULT_THEME });
     expect(root.style.getPropertyValue(FONT_FAMILY_VAR)).toBe("'Fira Code'");
     expect(root.style.getPropertyValue(FONT_SIZE_VAR)).toBe("16px");
+  });
+
+  it("writes a custom property for every token in the theme", () => {
+    // The CSS reads these by name; a token added to the type but not written
+    // here would silently paint as unstyled.
+    const root = document.createElement("div");
+    applyAppearance(root, { fontFamily: "x", fontSize: 14, theme: DEFAULT_THEME });
+
+    for (const [name, value] of Object.entries(DEFAULT_THEME.tokens)) {
+      expect(root.style.getPropertyValue(tokenVar(name))).toBe(value);
+    }
+  });
+
+  it("records the theme id on the element", () => {
+    const root = document.createElement("div");
+    applyAppearance(root, {
+      fontFamily: "x",
+      fontSize: 14,
+      theme: themeById("vscode-light"),
+    });
+    expect(root.dataset.theme).toBe("vscode-light");
+  });
+
+  it("replaces every token when the theme changes", () => {
+    // Not merged over the previous one: a token that only one theme defined
+    // would otherwise survive into the other.
+    const root = document.createElement("div");
+    applyAppearance(root, { fontFamily: "x", fontSize: 14, theme: DEFAULT_THEME });
+    applyAppearance(root, { fontFamily: "x", fontSize: 14, theme: themeById("vscode-light") });
+
+    expect(root.style.getPropertyValue(tokenVar("bg"))).toBe(
+      themeById("vscode-light").tokens.bg,
+    );
+  });
+});
+
+describe("tokenVar", () => {
+  it("kebab-cases a camelCase token name", () => {
+    expect(tokenVar("bg")).toBe("--ib-bg");
+    expect(tokenVar("bgChrome")).toBe("--ib-bg-chrome");
+    expect(tokenVar("ansiBrightBlack")).toBe("--ib-ansi-bright-black");
+  });
+});
+
+describe("the theme registry", () => {
+  it("gives every theme the same set of tokens", () => {
+    // A token missing from one theme is a colour that silently disappears when
+    // that theme is chosen.
+    const reference = Object.keys(DEFAULT_THEME.tokens).sort();
+    for (const theme of THEMES) {
+      expect(Object.keys(theme.tokens).sort()).toEqual(reference);
+    }
+  });
+
+  it("has no two themes sharing an id", () => {
+    const ids = THEMES.map((theme) => theme.id);
+    expect(new Set(ids).size).toBe(ids.length);
+  });
+
+  it("includes the default", () => {
+    expect(THEMES).toContain(DEFAULT_THEME);
   });
 });
 
@@ -92,7 +167,7 @@ describe("publishAppearance", () => {
     subscribe(first);
     subscribe(second);
 
-    const appearance = { fontFamily: "'Fira Code'", fontSize: 15 };
+    const appearance = { fontFamily: "'Fira Code'", fontSize: 15, theme: DEFAULT_THEME };
     publishAppearance(root, appearance);
 
     expect(first).toHaveBeenCalledWith(appearance);
@@ -103,7 +178,7 @@ describe("publishAppearance", () => {
   it("replays the current value to a subscriber that arrives late", () => {
     // A terminal or editor created after startup must not be left on the
     // defaults just because it missed the event.
-    const appearance = { fontFamily: "'Fira Code'", fontSize: 15 };
+    const appearance = { fontFamily: "'Fira Code'", fontSize: 15, theme: DEFAULT_THEME };
     publishAppearance(document.createElement("div"), appearance);
 
     const listener = vi.fn();
@@ -121,7 +196,7 @@ describe("publishAppearance", () => {
     const listener = vi.fn();
     const off = onAppearance(listener);
     off();
-    publishAppearance(document.createElement("div"), { fontFamily: "x", fontSize: 12 });
+    publishAppearance(document.createElement("div"), { fontFamily: "x", fontSize: 12, theme: DEFAULT_THEME });
     expect(listener).not.toHaveBeenCalled();
   });
 });

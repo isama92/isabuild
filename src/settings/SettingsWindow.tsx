@@ -3,6 +3,7 @@ import { getCurrentWindow } from "@tauri-apps/api/window";
 import { listFonts, type FontFamily } from "../lib/settings";
 import { useSettingsStore } from "../store/settingsStore";
 import { useAppearanceSync } from "../hooks/useAppearance";
+import { THEMES } from "../theme/themes";
 
 // The settings window (label `settings`, one instance).
 //
@@ -117,6 +118,28 @@ export function SettingsWindow() {
 
       <section className="settings-section">
         <h2 className="settings-section-title">Appearance</h2>
+
+        <div className="settings-field">
+          <label className="settings-label" htmlFor="theme">
+            Theme
+          </label>
+          <select
+            id="theme"
+            className="settings-select"
+            value={settings.theme}
+            onChange={(event) => void save({ theme: event.target.value })}
+          >
+            {THEMES.map((theme) => (
+              <option key={theme.id} value={theme.id}>
+                {theme.label}
+              </option>
+            ))}
+          </select>
+          <p className="settings-hint">
+            Applies to the workspace, the terminals and every diff and merge window, straight
+            away.
+          </p>
+        </div>
 
         <div className="settings-field">
           <label className="settings-label" htmlFor="font-family">

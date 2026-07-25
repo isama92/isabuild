@@ -4,6 +4,7 @@ import { SettingsWindow } from "./SettingsWindow";
 import { listFonts } from "../lib/settings";
 import { initialSettingsState, useSettingsStore } from "../store/settingsStore";
 import type { FontFamily, Settings } from "../lib/settings";
+import { THEMES } from "../theme/themes";
 
 vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn() }));
 vi.mock("@tauri-apps/api/event", () => ({ listen: vi.fn() }));
@@ -60,6 +61,25 @@ describe("SettingsWindow", () => {
     useSettingsStore.setState({ settings: null });
     render(<SettingsWindow />);
     expect(screen.getByText("Loading settings…")).toBeInTheDocument();
+  });
+
+  it("lists every theme in the registry", async () => {
+    await mount();
+    for (const theme of THEMES) {
+      expect(screen.getByRole("option", { name: theme.label })).toBeInTheDocument();
+    }
+  });
+
+  it("saves the chosen theme", async () => {
+    await mount();
+    fireEvent.change(screen.getByLabelText("Theme"), { target: { value: "vscode-light" } });
+    expect(save).toHaveBeenCalledWith({ theme: "vscode-light" });
+  });
+
+  it("shows the stored theme as the selection", async () => {
+    useSettingsStore.setState({ settings: settings({ theme: "vscode-light" }) });
+    await mount();
+    expect(screen.getByLabelText("Theme")).toHaveValue("vscode-light");
   });
 
   it("lists only monospace fonts by default", async () => {
