@@ -39,9 +39,20 @@ import { useSettingsStore } from "./settingsStore";
  * and visibility beside them are window preferences and deliberately survive.
  *
  * Merge resets (not `setState(x, true)`), so the action closures survive.
+ *
+ * The generation bump is what makes the reset stick. A read already in flight
+ * resolves *after* this and would otherwise write the previous repo's root and
+ * file list back in, after which every later refresh reads that root and the panel
+ * shows the wrong repo indefinitely. Reads capture the generation before their
+ * await and discard themselves if it moved. It is also why `phase` returning to
+ * `idle` here matters: that is what makes the Status panel say "Loading changes…"
+ * rather than "No changes" while the new project's first read is in flight.
  */
 function resetForProjectSwitch(): void {
-  useGitStore.setState(initialGitState);
+  useGitStore.setState((state) => ({
+    ...initialGitState,
+    generation: state.generation + 1,
+  }));
   useLayoutStore.setState({ branchMenuOpen: false, pendingGitAction: null });
 }
 

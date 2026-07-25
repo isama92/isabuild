@@ -8,6 +8,10 @@
 // one the user runs in the bottom terminal — refreshes the branch UI with no
 // extra plumbing and no polling. The store skips reads while one of our own
 // operations is in flight; see its module note.
+//
+// This hook is a dumb forwarder and must stay one: overlapping `repo://changed`
+// events are coalesced in the store, so a debounce here would only add latency on
+// top of the backend's own debounce window.
 
 import { useEffect } from "react";
 import { onRepoChanged, startWatch } from "../lib/gitStatus";
@@ -27,6 +31,13 @@ export function useRepoWatch(): void {
       if (!root) return; // not a repo: show the one-shot status, no watching
 
       await useGitStore.getState().refreshBranch();
+      if (cancelled) return;
+
+      // Merge state too, not only on later events: a project opened while a merge,
+      // rebase, cherry-pick or revert is in progress otherwise shows no banner
+      // until some unrelated file happens to change, and that banner is the only
+      // route to Continue and Abort.
+      await useGitStore.getState().refreshMerge();
       if (cancelled) return;
 
       // A watch failure is non-fatal — the panel still shows the initial

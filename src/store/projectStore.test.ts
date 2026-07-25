@@ -142,6 +142,19 @@ describe("open", () => {
     expect(typeof useGitStore.getState().refresh).toBe("function");
   });
 
+  it("bumps the git generation so an in-flight read cannot undo the reset", async () => {
+    // Without this a getStatus already in flight resolves after the reset and
+    // writes the old repo's root and file list back in, after which every later
+    // refresh reads that root: the panel shows the repo the user just left, for
+    // the rest of the session.
+    const before = useGitStore.getState().generation;
+    routeInvokes({ project_open: PROJECT, recent_projects: [] });
+
+    await useProjectStore.getState().open("/repos/one");
+
+    expect(useGitStore.getState().generation).toBe(before + 1);
+  });
+
   it("stays where it is and says why when the folder is not a repo", async () => {
     useProjectStore.setState({ phase: "welcome" });
     routeInvokes({

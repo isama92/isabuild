@@ -121,7 +121,7 @@ pub fn write_worktree_file(
         DiffError::Io(path.to_string(), "file has no parent directory".to_string())
     })?;
     let temp = tempfile::Builder::new()
-        .prefix(".isabuild-save-")
+        .prefix(crate::SAVE_TEMP_PREFIX)
         .tempfile_in(directory)
         .map_err(io_err)?;
 
@@ -496,7 +496,7 @@ mod tests {
             .expect("read dir")
             .filter_map(|entry| entry.ok())
             .map(|entry| entry.file_name().to_string_lossy().into_owned())
-            .filter(|name| name.starts_with(".isabuild-save-"))
+            .filter(|name| name.starts_with(crate::SAVE_TEMP_PREFIX))
             .collect();
         assert!(leftovers.is_empty(), "temp files left: {leftovers:?}");
     }

@@ -216,6 +216,45 @@ export function StatusPanel() {
     void useGitStore.getState().resolveConflictPath(entry.path, resolution);
   }
 
+  /**
+   * The render table, in priority order. `phase` is the *settled* state, so none
+   * of these arms can be reached by a read in flight: a refresh leaves the phase
+   * and the lists it found alone, and the previous result stays on screen until
+   * the new one replaces it.
+   *
+   * Guard clauses rather than nested ternaries on purpose. The Part 9 flicker
+   * lived in a four-deep ternary here, where "the empty state is gated on the
+   * phase" was true but unreadable.
+   */
+  function changesBody() {
+    if (phase === "error") {
+      // Kept during a retry, deliberately: `error` is only cleared on success,
+      // so the switch back to data is atomic. A placeholder here would just make
+      // a broken repo alternate instead of a clean one.
+      return <p className="status-empty">{error ?? "Could not read git status."}</p>;
+    }
+    if (phase === "idle") {
+      // Nothing has been read yet: first mount, or straight after a project
+      // switch, which resets this store to `idle`. NOT a refreshing indicator —
+      // that reset is the *only* route back to `idle` once a read has settled, so
+      // this cannot alternate with "No changes" the way an in-flight flag would.
+      return <p className="status-empty">Loading changes…</p>;
+    }
+    // `phase` is necessarily "ready" here, so the empty state no longer gates on
+    // it. That gate is what a clean repo failed on every single read.
+    if (isEmpty) {
+      return <p className="status-empty">No changes</p>;
+    }
+    return (
+      <>
+        {/* Conflicts first: nothing else can be committed until they are gone. */}
+        <ConflictGroup entries={conflicts} onOpen={openConflict} onResolve={resolveConflict} />
+        <StatusGroup title="Staged Changes" entries={staged} onOpen={openDiff} />
+        <StatusGroup title="Changes" entries={unstaged} onOpen={openDiff} />
+      </>
+    );
+  }
+
   return (
     <>
       <div className="panel-header">
@@ -242,22 +281,7 @@ export function StatusPanel() {
             {openError}
           </p>
         )}
-        {phase === "error" ? (
-          <p className="status-empty">{error ?? "Could not read git status."}</p>
-        ) : isEmpty && phase === "ready" ? (
-          <p className="status-empty">No changes</p>
-        ) : (
-          <>
-            {/* Conflicts first: nothing else can be committed until they are gone. */}
-            <ConflictGroup
-              entries={conflicts}
-              onOpen={openConflict}
-              onResolve={resolveConflict}
-            />
-            <StatusGroup title="Staged Changes" entries={staged} onOpen={openDiff} />
-            <StatusGroup title="Changes" entries={unstaged} onOpen={openDiff} />
-          </>
-        )}
+        {changesBody()}
       </div>
     </>
   );

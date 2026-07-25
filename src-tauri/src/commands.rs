@@ -126,6 +126,35 @@ pub async fn pty_exists(state: State<'_, PtyManager>, id: String) -> Result<bool
     Ok(state.exists(&id))
 }
 
+/// Where to read status from, and whether that path is already known to be a
+/// repository root (so the discovery `rev-parse` can be skipped).
+///
+/// Pulled out of [`git_status`] so the second half of that pair is testable, which
+/// matters because it is doing more than it looks like. `git::run_status` reports
+/// whatever root it is handed, so trusting `path` blindly would let a
+/// *subdirectory* come back as `repoRoot`; the frontend stores that
+/// (`gitStore.refresh`) and then uses it for every diff, merge, branch and remote
+/// operation afterwards. The comparison against the open project is what makes
+/// skipping the spawn provably safe, rather than safe as long as the only caller
+/// keeps behaving.
+fn status_start(open: Option<&Path>, path: Option<String>) -> Result<(PathBuf, bool), String> {
+    match path {
+        // The frontend echoes back the root a previous call returned, so every
+        // refresh after the first arrives here already resolved.
+        Some(p) => {
+            let p = PathBuf::from(p);
+            let resolved = open == Some(p.as_path());
+            Ok((p, resolved))
+        }
+        // The open project's root came from `resolve_repo_root` when it was opened.
+        None => Ok((
+            open.ok_or_else(|| "no project is open".to_string())?
+                .to_path_buf(),
+            true,
+        )),
+    }
+}
+
 /// Read the working-tree status of the repository containing `path`. With
 /// `path: None` we use the open project, which is also what both terminals are
 /// started in, so the panel and the shells can never disagree about the repo.
@@ -137,16 +166,17 @@ pub async fn git_status(
     active: State<'_, ActiveProject>,
     path: Option<String>,
 ) -> Result<GitStatus, String> {
-    let start = match path {
-        Some(p) => PathBuf::from(p),
-        None => active
-            .repo_root()
-            .ok_or_else(|| "no project is open".to_string())?,
-    };
-    tauri::async_runtime::spawn_blocking(move || git::status_from(&start))
-        .await
-        .map_err(|e| format!("git status task failed: {e}"))?
-        .map_err(|e| e.to_string())
+    let (start, resolved) = status_start(active.repo_root().as_deref(), path)?;
+    tauri::async_runtime::spawn_blocking(move || {
+        if resolved {
+            git::status_at(&start)
+        } else {
+            git::status_from(&start)
+        }
+    })
+    .await
+    .map_err(|e| format!("git status task failed: {e}"))?
+    .map_err(|e| e.to_string())
 }
 
 /// Both sides of one file's diff: the HEAD revision and the working-tree file.
@@ -792,4 +822,50 @@ pub async fn recent_remove(
         .map_err(|e| e.to_string())?;
     broadcast(&app, &settings, active.get().is_some());
     Ok(project::describe(&settings.recent_projects))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_open_project_is_read_without_discovery() {
+        let (start, resolved) = status_start(Some(Path::new("/repo")), None).expect("a project");
+        assert_eq!(start, PathBuf::from("/repo"));
+        assert!(resolved);
+    }
+
+    #[test]
+    fn the_root_echoed_back_is_read_without_discovery() {
+        // Every refresh after the first: the frontend returns the root a previous
+        // call reported.
+        let (start, resolved) =
+            status_start(Some(Path::new("/repo")), Some("/repo".to_string())).expect("a project");
+        assert_eq!(start, PathBuf::from("/repo"));
+        assert!(resolved);
+    }
+
+    #[test]
+    fn a_subdirectory_still_pays_for_discovery() {
+        // The load-bearing case. `run_status` reports whatever root it is handed, so
+        // skipping discovery here would return `/repo/src` as `repoRoot`, and the
+        // frontend would then use it for every diff, merge, branch and remote
+        // operation afterwards.
+        let (start, resolved) =
+            status_start(Some(Path::new("/repo")), Some("/repo/src".to_string())).expect("a path");
+        assert_eq!(start, PathBuf::from("/repo/src"));
+        assert!(!resolved);
+    }
+
+    #[test]
+    fn a_path_with_no_project_open_still_pays_for_discovery() {
+        let (_, resolved) = status_start(None, Some("/elsewhere".to_string())).expect("a path");
+        assert!(!resolved);
+    }
+
+    #[test]
+    fn no_path_and_no_project_is_refused() {
+        let error = status_start(None, None).expect_err("nothing to read");
+        assert!(error.contains("no project is open"));
+    }
 }
