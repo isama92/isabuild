@@ -79,7 +79,7 @@ Each part is an independent plan (see `plans/`), executed in order. A part is do
 - [x] **Part 7 — Full 3-pane merge editor** (`plans/PLAN-7-three-pane-merge-editor.md`)
   JetBrains-style ours | result | theirs on CodeMirror 6, replacing Part 6's marker view. The chunk model is rebuilt from the index stages (`ls-files -u` + the blobs) rather than from the markers on disk, so a change only one side made is visible and reversible too, not just the regions git could not decide: non-conflicting changes arrive auto-applied, and every chunk has gutter arrows plus ours/theirs/both/base. The result pane is editable, undecided conflicts sit in it as real marker text, and the file writes itself once and stages the instant the last marker goes. A file edited since git wrote it is detected against `git merge-file`'s own output and the user chooses which version to open. Panes scroll in proportion, with next/previous conflict to move between them. And because the stages look the same for one, a **rebase, cherry-pick or revert is now driven** rather than just named — continue / skip / abort, with `--skip` behind a confirm that says the commit is dropped.
 
-- [ ] **Part 8 — Polish & packaging** (`plans/PLAN-8-polish-and-packaging.md`)
+- [x] **Part 8 — Polish & packaging** (`plans/PLAN-8-polish-and-packaging.md`)
   A **File menu** (native: Open Folder, Open Recent, Close Project, Settings, Exit) and the
   concept of an open **project** that the app did not have. Before this, the repo came from
   wherever the app happened to be launched; now it is chosen, remembered, and reopened next
