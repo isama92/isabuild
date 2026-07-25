@@ -324,7 +324,7 @@ describe("DiffWindow", () => {
   it("closes the window on Escape and on Ctrl+W", async () => {
     await renderReady();
 
-    fireEvent.keyDown(window, { key: "Escape" });
+    fireEvent.keyDown(window, { key: "Escape", code: "Escape" });
     expect(close).toHaveBeenCalledTimes(1);
 
     fireEvent.keyDown(window, { key: "w", ctrlKey: true });
@@ -336,7 +336,7 @@ describe("DiffWindow", () => {
     // the event handled; the window must not close out from under that.
     await renderReady();
 
-    const handled = new KeyboardEvent("keydown", { key: "Escape", cancelable: true });
+    const handled = new KeyboardEvent("keydown", { key: "Escape", code: "Escape", cancelable: true });
     handled.preventDefault();
     await act(async () => {
       window.dispatchEvent(handled);

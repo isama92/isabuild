@@ -81,3 +81,40 @@ export function branchLabel(state: BranchState): string {
   if (state.detachedSha !== null) return `HEAD @ ${state.detachedSha}`;
   return "no branch";
 }
+
+/**
+ * Which sync operations are possible right now, and with what.
+ *
+ * Extracted in Part 8 so the three buttons' `disabled` state and the keybindings
+ * that fire the same operations read from one place. Two copies of "can I pull?"
+ * would eventually disagree, and the disagreement a keystroke can reach is the
+ * dangerous direction: it would run something the button refuses.
+ */
+export interface SyncAvailability {
+  /** Remote to operate on, or null when there is none. */
+  remote: string | null;
+  /** Fetch is available whenever there is a remote: a stale count is exactly
+   *  when it is wanted. */
+  canFetch: boolean;
+  canPull: boolean;
+  canPush: boolean;
+  /** True when a push has to publish the branch rather than update it. */
+  setUpstream: boolean;
+}
+
+export function syncAvailability(state: BranchState): SyncAvailability {
+  // A branch with no commits has nothing to sync. `canSync` in the UI.
+  const onABranch = state.current !== null && !state.unborn;
+  // Configured, still present, and actually on a remote. A pruned upstream is
+  // configured but dead, and an upstream that is a local branch is not a remote
+  // relationship at all.
+  const hasUpstream = state.upstream !== null && !state.upstreamGone && state.upstreamOnRemote;
+  const remote = state.remote;
+  return {
+    remote,
+    canFetch: remote !== null,
+    canPull: onABranch && hasUpstream && state.behind > 0,
+    canPush: onABranch && remote !== null && !(hasUpstream && state.ahead === 0),
+    setUpstream: !hasUpstream,
+  };
+}

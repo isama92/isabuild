@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act } from "react";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { BranchStatus } from "./BranchStatus";
-import { initialGitState, useGitStore } from "../store/gitStore";
+import { initialGitState, useGitStore, type RunningOp } from "../store/gitStore";
 import { initialLayoutState, useLayoutStore } from "../store/layoutStore";
 import type { BranchState } from "../lib/gitBranch";
 import type { FileEntry } from "../lib/gitStatus";
@@ -62,13 +62,14 @@ function stubActions() {
 
 function setup(
   overrides: Partial<BranchState> = {},
-  extra: { staged?: FileEntry[]; unstaged?: FileEntry[] } = {},
+  extra: { staged?: FileEntry[]; unstaged?: FileEntry[]; op?: RunningOp } = {},
 ) {
   useGitStore.setState({
     repoRoot: "/repo",
     branch: branchState(overrides),
     staged: extra.staged ?? [],
     unstaged: extra.unstaged ?? [],
+    op: extra.op ?? null,
   });
   const actions = stubActions();
   render(<BranchStatus />);
@@ -267,6 +268,46 @@ describe("BranchStatus sync controls", () => {
       branch: "main",
       setUpstream: true,
     });
+  });
+});
+
+describe("BranchStatus keystroke requests", () => {
+  it("runs the operation a keystroke asked for", () => {
+    const { runOp } = setup({ behind: 2 });
+    act(() => useLayoutStore.getState().requestGitAction("pull"));
+    expect(runOp).toHaveBeenCalledWith({ kind: "pull", remote: "origin" });
+  });
+
+  it("clears the request, so it does not fire twice", () => {
+    const { runOp } = setup({ behind: 2 });
+    act(() => useLayoutStore.getState().requestGitAction("pull"));
+    expect(useLayoutStore.getState().pendingGitAction).toBeNull();
+    expect(runOp).toHaveBeenCalledTimes(1);
+  });
+
+  it("refuses what the disabled button would refuse", () => {
+    // A keystroke must never reach an operation the UI says is unavailable:
+    // nothing to pull here, and git would only refuse it.
+    const { runOp } = setup({ behind: 0 });
+    act(() => useLayoutStore.getState().requestGitAction("pull"));
+    expect(runOp).not.toHaveBeenCalled();
+  });
+
+  it("publishes an unpublished branch when push is asked for", () => {
+    const { runOp } = setup({ upstream: null, ahead: 0 });
+    act(() => useLayoutStore.getState().requestGitAction("push"));
+    expect(runOp).toHaveBeenCalledWith({
+      kind: "push",
+      remote: "origin",
+      branch: "main",
+      setUpstream: true,
+    });
+  });
+
+  it("does nothing while another operation is already running", () => {
+    const { runOp } = setup({ behind: 2 }, { op: { id: "op-1", kind: "fetch", progress: "" } });
+    act(() => useLayoutStore.getState().requestGitAction("pull"));
+    expect(runOp).not.toHaveBeenCalled();
   });
 });
 

@@ -3,6 +3,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { initialProjectState, useProjectStore } from "./projectStore";
 import { initialSettingsState, useSettingsStore } from "./settingsStore";
 import { initialGitState, useGitStore } from "./gitStore";
+import { initialLayoutState, useLayoutStore } from "./layoutStore";
 import type { Bootstrap, Project, RecentProject, RecentState, Settings } from "../lib/settings";
 
 vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn() }));
@@ -54,6 +55,7 @@ beforeEach(() => {
   useProjectStore.setState(initialProjectState);
   useSettingsStore.setState(initialSettingsState);
   useGitStore.setState(initialGitState);
+  useLayoutStore.setState(initialLayoutState);
 });
 
 describe("start", () => {
@@ -197,6 +199,16 @@ describe("close", () => {
     expect(state.phase).toBe("welcome");
     expect(state.project).toBeNull();
     expect(useGitStore.getState().repoRoot).toBeNull();
+  });
+
+  it("closes a branch menu left open when the project closes", async () => {
+    useProjectStore.setState({ phase: "open", project: PROJECT });
+    useLayoutStore.setState({ branchMenuOpen: true });
+    routeInvokes({ project_close: undefined, recent_projects: [] });
+
+    await useProjectStore.getState().close();
+
+    expect(useLayoutStore.getState().branchMenuOpen).toBe(false);
   });
 
   it("stays in the workspace when the backend refuses", async () => {

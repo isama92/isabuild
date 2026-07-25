@@ -474,7 +474,7 @@ describe("MergeWindow", () => {
       render(<MergeWindow />);
       await waitFor(() => expect(screen.getByTestId("panes")).toBeInTheDocument());
 
-      fireEvent.keyDown(window, { key: "Escape" });
+      fireEvent.keyDown(window, { key: "Escape", code: "Escape" });
       expect(closeMock).toHaveBeenCalledTimes(1);
 
       fireEvent.keyDown(window, { key: "w", ctrlKey: true });

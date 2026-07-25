@@ -25,6 +25,7 @@ import { MergePanes } from "./MergePanes";
 import { binaryConflictActions } from "../lib/conflictView";
 import { onRepoChanged } from "../lib/gitStatus";
 import { useAppearanceSync } from "../hooks/useAppearance";
+import { useWindowKeybindings } from "../hooks/useWindowKeybindings";
 import { countConflictMarkers } from "../lib/mergeChunks";
 import {
   getConflictStages,
@@ -276,13 +277,19 @@ export function MergeWindow() {
     };
   }, []);
 
-  // Esc / Ctrl+W close, matching the diff window. Bubble phase and skipped once
-  // something else has handled the key — CodeMirror's own keymap runs first.
+  // Close-window comes from the settings (default Escape), matching the diff
+  // window; Ctrl/Cmd+W stays hardcoded as an OS convention. Bubble phase and
+  // skipped once something else has handled the key — CodeMirror's own keymap
+  // runs first.
+  useWindowKeybindings("merge", {
+    "close-window": () => void getCurrentWindow().close(),
+  });
+
   useEffect(() => {
     function onKeyDown(event: KeyboardEvent) {
       if (event.defaultPrevented) return;
-      const accel = event.ctrlKey || event.metaKey;
-      if (event.key === "Escape" || (accel && event.key.toLowerCase() === "w")) {
+      if (!(event.ctrlKey || event.metaKey)) return;
+      if (event.key.toLowerCase() === "w") {
         event.preventDefault();
         void getCurrentWindow().close();
       }

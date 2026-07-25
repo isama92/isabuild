@@ -16,6 +16,7 @@ import { getCurrentWindow } from "@tauri-apps/api/window";
 import { DiffPane } from "./DiffPane";
 import { onRepoChanged } from "../lib/gitStatus";
 import { useAppearanceSync } from "../hooks/useAppearance";
+import { useWindowKeybindings } from "../hooks/useWindowKeybindings";
 import { shouldAdoptDiskContent } from "../lib/diffSync";
 import {
   getFileDiff,
@@ -247,24 +248,34 @@ export function DiffWindow() {
     return () => window.removeEventListener("blur", flush);
   }, [flushSave]);
 
+  // Close-window comes from the settings (default Escape); Ctrl/Cmd+W and
+  // Ctrl/Cmd+S stay hardcoded here. Both are OS conventions rather than
+  // preferences, and a user who rebound Ctrl+W away would have no way to close
+  // a window that has no menu.
+  //
   // Bubble phase, and skipped once something else has handled the key: Monaco
   // consumes Escape to dismiss its own widgets (the find bar, most visibly) and
   // marks the event handled, so this only closes the window when Escape had
-  // nothing else to do. `event.key`, not `event.code`, for the letters — the
-  // physical position of W and S moves between layouts, the label does not.
+  // nothing else to do. `event.key`, not `event.code`, for these two letters —
+  // the physical position of W and S moves between layouts, the label does not.
+  useWindowKeybindings("diff", {
+    "close-window": () => void getCurrentWindow().close(),
+  });
+
   useEffect(() => {
     function onKeyDown(event: KeyboardEvent) {
       if (event.defaultPrevented) return;
       const accel = event.ctrlKey || event.metaKey;
+      if (!accel) return;
       const key = event.key.toLowerCase();
       // Ctrl/Cmd+S has nothing to save that auto-save would not, but muscle
       // memory deserves an answer: write immediately.
-      if (accel && key === "s") {
+      if (key === "s") {
         event.preventDefault();
         void flushSave();
         return;
       }
-      if (event.key === "Escape" || (accel && key === "w")) {
+      if (key === "w") {
         event.preventDefault();
         void getCurrentWindow().close();
       }

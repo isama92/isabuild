@@ -44,6 +44,7 @@ import { defaultKeymap, history, historyKeymap } from "@codemirror/commands";
 import { languages } from "@codemirror/language-data";
 import { languageForPath } from "../lib/cmLanguage";
 import { currentAppearance, onAppearance } from "../lib/appearance";
+import { useWindowKeybindings } from "../hooks/useWindowKeybindings";
 import { DEFAULT_THEME } from "../theme/themes";
 import { mirrorScrollTop, worthScrolling } from "../lib/paneScroll";
 import {
@@ -377,6 +378,14 @@ export function MergePanes({ path, stages, value, onChange, busy }: MergePanesPr
       tracked.current = null;
     };
   }, [apply, mirrorFrom]);
+
+  // Conflict navigation from the keyboard. Registered here rather than in the
+  // window because `goToConflict` needs the live result view, and the window
+  // has no handle on it.
+  useWindowKeybindings("merge", {
+    "next-conflict": () => goToConflict("next"),
+    "previous-conflict": () => goToConflict("previous"),
+  });
 
   // Appearance changes reach the panes two different ways.
   //

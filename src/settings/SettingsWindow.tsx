@@ -4,6 +4,7 @@ import { listFonts, type FontFamily } from "../lib/settings";
 import { useSettingsStore } from "../store/settingsStore";
 import { useAppearanceSync } from "../hooks/useAppearance";
 import { THEMES } from "../theme/themes";
+import { KeybindingsTab } from "./KeybindingsTab";
 
 // The settings window (label `settings`, one instance).
 //
@@ -209,6 +210,8 @@ export function SettingsWindow() {
           <div className="settings-preview-line">{PREVIEW_GLYPHS}</div>
         </div>
       </section>
+
+      <KeybindingsTab settings={settings} save={(patch) => void save(patch)} />
     </div>
   );
 }

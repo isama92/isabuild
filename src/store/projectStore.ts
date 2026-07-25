@@ -20,18 +20,29 @@ import {
   type RecentProject,
 } from "../lib/settings";
 import { initialGitState, useGitStore } from "./gitStore";
+import { useLayoutStore } from "./layoutStore";
 import { useSettingsStore } from "./settingsStore";
 
 /**
- * Forget everything the git store knows. It is a module singleton holding the
- * previous repo's root, status and branch state, and a remounted Layout would
- * otherwise render the old repo's file list for one frame and then re-read
- * against a root that is no longer the project.
+ * Forget everything about the project being left behind.
  *
- * A merge reset (not `setState(x, true)`), so the action closures survive.
+ * The git store is a module singleton holding the previous repo's root, status
+ * and branch state, and a remounted Layout would otherwise render the old
+ * repo's file list for one frame and then re-read against a root that is no
+ * longer the project.
+ *
+ * The layout store keeps two *transient* fields that belong to a project rather
+ * than to the window: an open branch menu, and a sync operation a keystroke
+ * asked for. Both used to be component state and so reset themselves on
+ * unmount; since Part 8's keybindings lifted them into the store, a branch menu
+ * left open would reappear over the next project's status bar. The panel sizes
+ * and visibility beside them are window preferences and deliberately survive.
+ *
+ * Merge resets (not `setState(x, true)`), so the action closures survive.
  */
-function resetGitState(): void {
+function resetForProjectSwitch(): void {
   useGitStore.setState(initialGitState);
+  useLayoutStore.setState({ branchMenuOpen: false, pendingGitAction: null });
 }
 
 /**
@@ -110,7 +121,7 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
     set({ busy: true, error: null });
     try {
       const project = await openProject(path);
-      resetGitState();
+      resetForProjectSwitch();
       set({ phase: "open", project, busy: false });
       await get().refreshRecents();
     } catch (cause) {
@@ -139,7 +150,7 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
     set({ busy: true });
     try {
       await closeProject();
-      resetGitState();
+      resetForProjectSwitch();
       set({ phase: "welcome", project: null, busy: false, error: null });
       await get().refreshRecents();
     } catch (cause) {
