@@ -214,6 +214,14 @@ mod tests {
     /// Fails if anyone re-adds a hardcoded version to the config: two sources of
     /// truth drift silently, and the symptom surfaces late and confusingly as an
     /// installer whose filename disagrees with the version the app reports.
+    ///
+    /// Skipped on macOS: there `generate_context!()` also emits a
+    /// `#[link_section = "__TEXT,__info_plist"]` static, and `run()` already
+    /// expands the macro in this crate — a second expansion defines
+    /// `_EMBED_INFO_PLIST` twice and the lib test fails to *compile*. The
+    /// invariant is platform-independent, so Linux (every PR) and Windows cover
+    /// it. Do not "fix" this by dropping the cfg.
+    #[cfg(not(target_os = "macos"))]
     #[test]
     fn app_version_comes_from_the_cargo_manifest() {
         // Annotated because `Context` is generic over the runtime, which only
