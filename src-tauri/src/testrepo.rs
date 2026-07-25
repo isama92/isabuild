@@ -79,6 +79,21 @@ pub fn empty_repo() -> tempfile::TempDir {
     ] {
         git_in(dir.path(), &["config", key, value]);
     }
+    // Ignore resolution has to be deterministic too, for the same reason as the
+    // settings above: the code under test builds its commands through
+    // `git::git_read_command`, which sets no config env, so a developer with a
+    // global `~/.config/git/ignore` would get different answers from the same test
+    // than a bare CI runner does. A repo-local `core.excludesFile` pointing at a
+    // file that does not exist overrides whatever is global.
+    let no_excludes = dir.path().join("no-global-excludes");
+    git_in(
+        dir.path(),
+        &[
+            "config",
+            "core.excludesFile",
+            &no_excludes.to_string_lossy(),
+        ],
+    );
     dir
 }
 

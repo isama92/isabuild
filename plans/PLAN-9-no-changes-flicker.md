@@ -45,6 +45,9 @@ Three independent defects compose into one symptom.
 | Coalescing location | **`refreshAll` only**, in closure state beside `mutate`, following `runOp`'s closure-local `opId`. A promise slot in the store would be blanked by `resetForProjectSwitch` mid-cascade, letting an overlapping one start: the opposite of the point. |
 | The coalescing contract | **`refreshAll()` always resolves after a status read that began after the call.** A late caller joins the *trailing* run, never the in-flight promise, so a mutation awaiting it can never be handed a read from before its own write. |
 | `.isabuild-save-*` | **Both** a watcher rule and a `parse_porcelain_v2` rule, because they fix different failures: the watcher stops up to 4 events per keystroke burst, while the parser stops the phantom untracked row that any *legitimately* triggered read produces if it lands in the ~1 ms window while the temp file exists. Adding it to isabuild's own `.gitignore` fixes neither, since the user's repos will not have it. |
+| **A read is not a change** (found during 9b, not in the original plan) | Every path is compared against a remembered stamp instead of being taken at face value. `notify`'s inotify mask includes **`OPEN`** (`notify-8.2.0/src/inotify.rs:427`), so *opening* a file or directory is an event: answering one refresh by reading the repo asked for the next, measured at about **seven refreshes a second on an idle clean repository, on ext4 as well as tmpfs**. This is not a flaw the filter introduced, it is one it made visible: a plain `git status` was always enough to sustain it, which is very likely part of what the original bug report was actually seeing. The stamp is mtime and length, plus ctime and mode on Unix, because `chmod +x` shows in `git status` while moving neither mtime nor length, and a second-granularity filesystem collapses two same-length writes. macOS and Windows do not report opens, so this was Linux-shaped, and it is not `cfg`-gated because "did this file move" is the right question everywhere and costs one `stat`. |
+| A path git will not classify | `check-ignore` exits 128 for a **submodule** path rather than answering. One of those in a batch used to void every verdict in it, sending a whole build directory back to refreshing and re-asking every window. Now the batch is retried one slug at a time and refusals are remembered, so it costs one round rather than one per window, and its batch-mates keep their verdicts. |
+| `.gitignore` on a cold cache | Resolved through git rather than looked up in the cache. The ancestor guard needs a warm cache, and the invalidate-and-return would leave it cold for the next batch too: an `npm install` therefore refreshed once per debounce window for its whole duration and never self-healed. |
 
 ## Deliverables
 
@@ -77,9 +80,12 @@ pass 5 skipped in the common cases:
 
 The `.git` allow-list is derived from what the backend actually reads (`merge_state`, `branch_state`,
 `run_status`): `index`, `HEAD`, `ORIG_HEAD`, `MERGE_HEAD`, `MERGE_MSG`, `CHERRY_PICK_HEAD`,
-`REVERT_HEAD`, `BISECT_LOG`, `packed-refs`, `shallow`, and anything under `refs/`, `rebase-merge/`,
-`rebase-apply/`, `sequencer/`. The rule for future additions: allow what git writes at most once per
-user action, drop what it writes per object or per lock.
+`REVERT_HEAD`, `BISECT_LOG`, `packed-refs`, `shallow`, `FETCH_HEAD`, and anything under `refs/`,
+`reftable/`, `rebase-merge/`, `rebase-apply/`, `sequencer/`. The rule for future additions: allow what
+git writes at most once per user action, drop what it writes per object or per lock. `FETCH_HEAD` is on
+the list because it is the only source of the branch panel's "fetched N minutes ago", and a fetch that
+brings nothing new writes nothing else; `reftable/` because with the newer ref backend `refs/` stays
+empty and a branch update rewrites `reftable/*` instead.
 
 ### 3. Rust: `src-tauri/src/git.rs`
 `check_ignored(root, slugs)`, writing its NUL-framed input **from a separate thread**: git answers as
@@ -114,10 +120,14 @@ only on the failure path, so the `NotARepo` message stays as it was; and untrack
 - **A linked worktree or a submodule is not covered**, and was not before either: when the project's
   `.git` is a *file*, the index, HEAD and refs live outside the watch root, so staging never triggers
   a refresh. The new `.git` rules read as though this were handled, hence this note.
-- **A force-added tracked file under an ignored directory** has its refresh delayed to the next real
-  event once that directory is cached as ignored. Correct on a cold cache. This is the one place the
-  filter knowingly disagrees with `git status`, and it has a named characterisation test so nobody
-  "fixes" it into a per-path query that defeats the cache.
+- **A force-added tracked file under an ignored directory** works, and by a better mechanism than the
+  plan assumed: git declines to report a directory as ignored at all once it holds tracked content, so
+  the ancestor short-circuit never arms there. Two things follow, both pinned by tests. A `dir/`
+  pattern only matches a path git can see *is* a directory, so a path that does not exist comes back
+  "not ignored" (which is why the fixtures create their ignored directories). And a file force-added
+  into a directory whose verdict is *already* cached is missed until the next flush: the `git add`
+  itself is seen, because it writes `.git/index`, but later edits to that file are not. That last one
+  is the only place the filter knowingly disagrees with `git status`.
 - **A global `core.excludesFile` edited while the app runs** is not detected: it is outside the watch
   root. The stale window ends at the next `.gitignore` edit or project switch.
 - An awaited mutation can now wait up to two cascades, by construction of the freshness contract.

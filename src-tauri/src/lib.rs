@@ -15,6 +15,7 @@ pub mod spawn;
 #[cfg(test)]
 pub mod testrepo;
 pub mod watcher;
+pub mod watchfilter;
 
 use gitops::GitOps;
 use menu::MenuState;
@@ -27,6 +28,15 @@ use watcher::GitWatcher;
 /// Label of the window declared in `tauri.conf.json`. Tauri defaults an
 /// unnamed window to `main`; the diff windows are labelled `diff-<hash>`.
 const MAIN_WINDOW_LABEL: &str = "main";
+
+/// Prefix of the diff window's atomic-save temp file, which lands in the target's
+/// own directory so the rename cannot cross a filesystem.
+///
+/// Named in three places, hence the shared constant: where it is created
+/// (`diff::write_worktree_file`), where the watcher drops its events
+/// (`watchfilter`), and where a status read that caught it mid-write drops the
+/// phantom untracked row (`git::parse_porcelain_v2`).
+pub(crate) const SAVE_TEMP_PREFIX: &str = ".isabuild-save-";
 
 /// Close every window that is not the workspace.
 ///

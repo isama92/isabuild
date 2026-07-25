@@ -24,6 +24,8 @@
 //! `UD` has no text at all, and Part 6 cannot offer the right action without the
 //! distinction.
 
+use std::collections::HashSet;
+use std::io::Write as _;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
@@ -168,6 +170,67 @@ pub fn run_status(root: &Path) -> Result<GitStatus, GitError> {
         unstaged,
         conflicts,
     })
+}
+
+/// Which of `rel_slugs` git would ignore: `git check-ignore --stdin -z`.
+///
+/// Slugs are `/`-separated paths relative to `root`, and the returned set holds
+/// exactly the subset git named, echoed back verbatim. Used by the watcher filter
+/// to drop events for paths `status` would never report anyway.
+///
+/// Asking git rather than reading `.gitignore` ourselves is the rule this whole
+/// module follows: the answer then always agrees with [`run_status`], nested,
+/// global and `info/exclude` patterns included.
+///
+/// Note the deliberately absent `--no-index`. By default `check-ignore` consults
+/// the index, so a *tracked* path matching an ignore pattern (`git add -f
+/// node_modules/keep.js`) is reported as **not** ignored, which is exactly how
+/// `status` treats it. `--no-index` answers the opposite question, and using it
+/// here would hide real changes.
+pub fn check_ignored(root: &Path, rel_slugs: &[String]) -> Result<HashSet<String>, GitError> {
+    if rel_slugs.is_empty() {
+        return Ok(HashSet::new());
+    }
+
+    let mut input = Vec::new();
+    for slug in rel_slugs {
+        input.extend_from_slice(slug.as_bytes());
+        input.push(0);
+    }
+
+    let mut child = git_read_command(root)
+        .args(["check-ignore", "--stdin", "-z"])
+        // git_read_command closes stdin, and check-ignore has to read it. The
+        // last call to Command::stdin wins.
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(map_io_err)?;
+
+    let mut sink = child.stdin.take().expect("stdin was piped");
+    // Written from its own thread, and this is not a style choice: git answers as
+    // it reads, so writing a batch larger than the pipe buffer (4 KB on Windows)
+    // while nothing drains stdout deadlocks both sides. A write error only means
+    // git exited first; the exit status below is what decides.
+    let writer = std::thread::spawn(move || {
+        let _ = sink.write_all(&input);
+    });
+    let output = child.wait_with_output().map_err(map_io_err)?;
+    let _ = writer.join();
+
+    match output.status.code() {
+        // 0 = at least one path is ignored, 1 = none of them are. Both are
+        // answers; only 1 has an empty stdout.
+        Some(0 | 1) => Ok(output
+            .stdout
+            .split(|&b| b == 0)
+            .filter(|slug| !slug.is_empty())
+            .map(|slug| String::from_utf8_lossy(slug).into_owned())
+            .collect()),
+        // 128 is fatal (not a repository, a path outside it); None is a signal.
+        _ => Err(GitError::CommandFailed(stderr_of(&output))),
+    }
 }
 
 /// A `git` invocation rooted at `dir`, with stdin closed so it can never block
@@ -599,5 +662,92 @@ mod tests {
                 ("untracked.txt", ChangeStatus::Untracked),
             ]
         );
+    }
+
+    /// A repo with `ignored/` in a committed `.gitignore`, the directory present on
+    /// disk (a `dir/` pattern only matches something git can see is a directory).
+    fn repo_ignoring_a_directory() -> tempfile::TempDir {
+        let dir = crate::testrepo::repo_with_commit("file.txt", "one\n");
+        crate::testrepo::write(dir.path(), ".gitignore", "ignored/\n");
+        crate::testrepo::git_in(dir.path(), &["add", ".gitignore"]);
+        crate::testrepo::commit(dir.path(), "ignore rules");
+        std::fs::create_dir(dir.path().join("ignored")).expect("create dir");
+        dir
+    }
+
+    fn slugs(names: &[&str]) -> Vec<String> {
+        names.iter().map(|name| (*name).to_string()).collect()
+    }
+
+    #[test]
+    fn check_ignored_reports_only_the_ignored_subset() {
+        let dir = repo_ignoring_a_directory();
+        let ignored = check_ignored(
+            dir.path(),
+            &slugs(&["file.txt", "ignored/a", "src/main.rs", "ignored"]),
+        )
+        .expect("check-ignore answers");
+
+        let mut listed: Vec<&str> = ignored.iter().map(String::as_str).collect();
+        listed.sort_unstable();
+        assert_eq!(listed, vec!["ignored", "ignored/a"]);
+    }
+
+    #[test]
+    fn check_ignored_treats_nothing_ignored_as_an_answer() {
+        // Exit 1 with empty stdout is git saying "none of these", not a failure.
+        let dir = repo_ignoring_a_directory();
+        let ignored = check_ignored(dir.path(), &slugs(&["file.txt", "src/main.rs"]))
+            .expect("exit 1 is fine");
+        assert!(ignored.is_empty());
+    }
+
+    #[test]
+    fn check_ignored_asked_nothing_spawns_nothing() {
+        let dir = repo_ignoring_a_directory();
+        assert!(check_ignored(dir.path(), &[]).expect("no batch").is_empty());
+    }
+
+    #[test]
+    fn check_ignored_handles_a_batch_larger_than_a_pipe_buffer() {
+        // The deadlock regression test. git answers as it reads, so writing a batch
+        // this size from the calling thread while nothing drains stdout wedges both
+        // processes: the failure shows up as a hung test, i.e. a CI timeout, not an
+        // assertion. 5000 paths is far past every platform's pipe buffer.
+        let dir = repo_ignoring_a_directory();
+        let names: Vec<String> = (0..5000).map(|index| format!("ignored/f{index}")).collect();
+
+        let ignored = check_ignored(dir.path(), &names).expect("check-ignore answers");
+
+        assert_eq!(ignored.len(), 5000);
+    }
+
+    #[test]
+    fn check_ignored_does_not_report_a_tracked_file_that_matches_a_pattern() {
+        // Why `--no-index` is deliberately absent: `status` reports changes to a
+        // force-added file, so the watcher has to refresh for it. Passing
+        // `--no-index` would answer the opposite question and hide real changes.
+        let dir = repo_ignoring_a_directory();
+        crate::testrepo::write(dir.path(), "ignored/keep.txt", "one\n");
+        crate::testrepo::git_in(dir.path(), &["add", "-f", "ignored/keep.txt"]);
+        crate::testrepo::commit(dir.path(), "force add");
+
+        let ignored = check_ignored(
+            dir.path(),
+            &slugs(&["ignored/keep.txt", "ignored/other.txt"]),
+        )
+        .expect("check-ignore answers");
+
+        assert!(!ignored.contains("ignored/keep.txt"));
+        assert!(ignored.contains("ignored/other.txt"));
+    }
+
+    #[test]
+    fn check_ignored_errors_outside_a_repository() {
+        // 128, which the caller turns into "refresh, we do not know".
+        let dir = tempfile::tempdir().expect("temp dir");
+        let error = check_ignored(dir.path(), &slugs(&["anything.txt"]))
+            .expect_err("not a repository must fail");
+        assert!(matches!(error, GitError::CommandFailed(_)));
     }
 }
