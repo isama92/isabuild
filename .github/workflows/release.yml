@@ -1,0 +1,138 @@
+name: Release
+
+# Builds the installers for a published release and attaches them to it.
+# Triggered by the release release-plz publishes, which is why release-plz.yml
+# must use a PAT: a release created by GITHUB_TOKEN fires no event, and this
+# workflow would never run.
+on:
+  release:
+    types: [published]
+
+permissions:
+  contents: write
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: 0
+
+jobs:
+  bundle:
+    name: Bundle (${{ matrix.label }})
+    runs-on: ${{ matrix.os }}
+    # Longer than bundle.yml's 45: the macOS job compiles every dependency
+    # twice for the universal binary.
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-22.04
+            label: linux
+            bundles: deb,rpm,appimage
+          - os: windows-2022
+            label: windows
+            bundles: nsis
+          - os: macos-14
+            label: macos
+            bundles: dmg
+            # One .dmg that runs on both Intel and Apple Silicon.
+            target: universal-apple-darwin
+            rust-targets: aarch64-apple-darwin,x86_64-apple-darwin
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          # Build the tag, not the branch tip: the tag's tree carries the
+          # release-plz version bump, so the installer filenames and the app's
+          # own version are the released ones.
+          ref: ${{ github.event.release.tag_name }}
+
+      - name: Install Tauri system dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev build-essential curl wget file \
+            libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30 # stable
+        with:
+          toolchain: stable
+          targets: ${{ matrix.rust-targets }}
+
+      - name: Cache cargo build
+        uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
+        with:
+          workspaces: src-tauri
+          key: release-${{ matrix.label }}
+
+      - name: Install Node
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        with:
+          node-version: 24
+          cache: npm
+
+      - name: Install npm dependencies
+        run: npm ci
+
+      # --bundles is explicit rather than inherited from tauri.conf.json's
+      # "targets": "all", so Windows does not spend time on an .msi that is
+      # never uploaded.
+      - name: Build installers
+        shell: bash
+        env:
+          TARGET: ${{ matrix.target }}
+          BUNDLES: ${{ matrix.bundles }}
+        run: |
+          set -euo pipefail
+          args=(--bundles "$BUNDLES")
+          if [ -n "$TARGET" ]; then
+            args+=(--target "$TARGET")
+          fi
+          npm run tauri build -- "${args[@]}"
+
+      # Staged in release-assets/, NOT dist/: dist/ is Vite's frontend output
+      # (tauri.conf.json's frontendDist), which the build step above has just
+      # filled. Collecting into it would make the empty-directory guard below
+      # useless and attach index.html and friends to the release.
+      - name: Collect bundles and checksums
+        shell: bash
+        env:
+          TARGET: ${{ matrix.target }}
+        run: |
+          set -euo pipefail
+          # A --target build nests its output under the target triple.
+          dir="src-tauri/target${TARGET:+/$TARGET}/release/bundle"
+          out=release-assets
+          rm -rf "$out"
+          mkdir -p "$out"
+          find "$dir" -type f \
+            \( -name '*.deb' -o -name '*.rpm' -o -name '*.AppImage' \
+               -o -name '*-setup.exe' -o -name '*.dmg' \) \
+            -exec cp {} "$out"/ \;
+          # gh release upload has no equivalent of upload-artifact's
+          # if-no-files-found: error. Without this guard a bundling change that
+          # renames or relocates the output would publish a release with no
+          # installers and pass.
+          if [ -z "$(ls -A "$out")" ]; then
+            echo "::error::no installers found under $dir"
+            exit 1
+          fi
+          cd "$out"
+          # macOS ships shasum but not sha256sum; Git Bash on Windows is the
+          # other way round.
+          for f in *; do
+            if command -v sha256sum >/dev/null 2>&1; then
+              sha256sum "$f" > "$f.sha256"
+            else
+              shasum -a 256 "$f" > "$f.sha256"
+            fi
+          done
+          ls -l
+
+      - name: Upload installers to release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ github.event.release.tag_name }}
+        run: gh release upload "$TAG" release-assets/* --clobber
