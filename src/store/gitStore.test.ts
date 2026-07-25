@@ -3,6 +3,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { initialGitState, useGitStore } from "./gitStore";
 import type { BranchState } from "../lib/gitBranch";
+import { mergeState } from "../test/factories";
 
 vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn() }));
 vi.mock("@tauri-apps/api/event", () => ({ listen: vi.fn() }));
@@ -165,7 +166,7 @@ describe("gitStore.refreshAll", () => {
     routeInvokes({
       git_status: EMPTY_STATUS,
       git_branch_state: branchState(),
-      git_merge_state: { kind: "none", mergingRef: null },
+      git_merge_state: mergeState("none"),
     });
     await useGitStore.getState().refreshAll();
     expect(invokeMock).toHaveBeenCalledWith("git_status", { path: null });
@@ -180,11 +181,13 @@ describe("gitStore.refreshAll", () => {
         conflicts: [{ path: "a.ts", kind: "bothModified" }],
       },
       git_branch_state: branchState(),
-      git_merge_state: { kind: "merge", mergingRef: "feature" },
+      git_merge_state: mergeState("merge", { mergingRef: "feature" }),
     });
     await useGitStore.getState().refreshAll();
     expect(useGitStore.getState().conflicts).toEqual([{ path: "a.ts", kind: "bothModified" }]);
-    expect(useGitStore.getState().mergeState).toEqual({ kind: "merge", mergingRef: "feature" });
+    expect(useGitStore.getState().mergeState).toEqual(
+      mergeState("merge", { mergingRef: "feature" }),
+    );
   });
 
   it("keeps the last known merge state when the read fails", async () => {
@@ -192,7 +195,7 @@ describe("gitStore.refreshAll", () => {
     // route to Continue and Abort.
     useGitStore.setState({
       repoRoot: "/repo",
-      mergeState: { kind: "merge", mergingRef: "feature" },
+      mergeState: mergeState("merge", { mergingRef: "feature" }),
     });
     routeInvokes({
       git_status: EMPTY_STATUS,
@@ -200,7 +203,9 @@ describe("gitStore.refreshAll", () => {
       git_merge_state: new Error("index.lock exists"),
     });
     await useGitStore.getState().refreshAll();
-    expect(useGitStore.getState().mergeState).toEqual({ kind: "merge", mergingRef: "feature" });
+    expect(useGitStore.getState().mergeState).toEqual(
+      mergeState("merge", { mergingRef: "feature" }),
+    );
   });
 
   it("skips both reads while an operation is running", async () => {
@@ -498,7 +503,13 @@ describe("gitStore.cancelOp", () => {
 
 describe("gitStore merge actions", () => {
   beforeEach(() => {
-    useGitStore.setState({ repoRoot: "/repo" });
+    // A merge in progress by default. `concludeOp` reads the kind to *name* what
+    // happened, and the banner is the only way to reach it — so it can never be
+    // called with nothing in progress.
+    useGitStore.setState({
+      repoRoot: "/repo",
+      mergeState: mergeState("merge", { mergingRef: "feature" }),
+    });
   });
 
   it("merges a ref and reports success", async () => {
@@ -506,7 +517,7 @@ describe("gitStore merge actions", () => {
       git_merge: { conflicted: false, output: "Fast-forward" },
       git_status: EMPTY_STATUS,
       git_branch_state: branchState(),
-      git_merge_state: { kind: "none", mergingRef: null },
+      git_merge_state: mergeState("none"),
     });
 
     await expect(useGitStore.getState().mergeBranch("feature")).resolves.toBe(true);
@@ -526,7 +537,7 @@ describe("gitStore merge actions", () => {
       git_merge: { conflicted: true, output: "CONFLICT (content): Merge conflict in a.ts" },
       git_status: { ...EMPTY_STATUS, conflicts: [{ path: "a.ts", kind: "bothModified" }] },
       git_branch_state: branchState(),
-      git_merge_state: { kind: "merge", mergingRef: "feature" },
+      git_merge_state: mergeState("merge", { mergingRef: "feature" }),
     });
 
     await expect(useGitStore.getState().mergeBranch("feature")).resolves.toBe(false);
@@ -549,40 +560,71 @@ describe("gitStore merge actions", () => {
 
   it("continues the merge and notes it", async () => {
     routeInvokes({
-      git_merge_continue: undefined,
+      git_op: undefined,
       git_status: EMPTY_STATUS,
       git_branch_state: branchState(),
-      git_merge_state: { kind: "none", mergingRef: null },
+      git_merge_state: mergeState("none"),
     });
 
-    await expect(useGitStore.getState().continueMerge()).resolves.toBe(true);
+    await expect(useGitStore.getState().concludeOp("continue")).resolves.toBe(true);
 
-    expect(invokeMock).toHaveBeenCalledWith("git_merge_continue", { repoRoot: "/repo" });
+    // Only the action goes down the wire; the backend derives the argv.
+    expect(invokeMock).toHaveBeenCalledWith("git_op", {
+      repoRoot: "/repo",
+      action: "continue",
+    });
     expect(useGitStore.getState().notice).toBe("Merge committed");
   });
 
   it("reports git's refusal to continue, with the command to retry", async () => {
-    routeInvokes({ git_merge_continue: new Error("You have unmerged files") });
+    routeInvokes({ git_op: new Error("You have unmerged files") });
 
-    await expect(useGitStore.getState().continueMerge()).resolves.toBe(false);
+    await expect(useGitStore.getState().concludeOp("continue")).resolves.toBe(false);
 
     expect(useGitStore.getState().opError?.detail).toMatch(/unmerged files/);
     expect(useGitStore.getState().opError?.command).toBe("git merge --continue");
     expect(useGitStore.getState().notice).toBeNull();
   });
 
-  it("aborts the merge and notes it", async () => {
+  it("names the failure after whatever is actually in progress", async () => {
+    // The kind never chooses the command, but it does choose the words — and
+    // "Could not continue the merge" during a rebase would be a lie.
+    useGitStore.setState({ mergeState: mergeState("rebase", { mergingRef: "feature" }) });
+    routeInvokes({ git_op: new Error("could not apply abc123") });
+
+    await expect(useGitStore.getState().concludeOp("continue")).resolves.toBe(false);
+
+    expect(useGitStore.getState().opError?.title).toMatch(/continue the rebase/i);
+    expect(useGitStore.getState().opError?.command).toBe("git rebase --continue");
+  });
+
+  it("skips a commit and notes what happened to it", async () => {
+    useGitStore.setState({ mergeState: mergeState("rebase", { mergingRef: "feature" }) });
     routeInvokes({
-      git_merge_abort: undefined,
+      git_op: undefined,
       git_status: EMPTY_STATUS,
       git_branch_state: branchState(),
-      git_merge_state: { kind: "none", mergingRef: null },
+      git_merge_state: mergeState("none"),
     });
 
-    await expect(useGitStore.getState().abortMerge()).resolves.toBe(true);
+    await expect(useGitStore.getState().concludeOp("skip")).resolves.toBe(true);
 
-    expect(invokeMock).toHaveBeenCalledWith("git_merge_abort", { repoRoot: "/repo" });
-    expect(useGitStore.getState().notice).toBe("Merge aborted");
+    expect(invokeMock).toHaveBeenCalledWith("git_op", { repoRoot: "/repo", action: "skip" });
+    expect(useGitStore.getState().notice).toBe("Skipped that commit");
+  });
+
+  it("aborts the merge and notes it", async () => {
+    routeInvokes({
+      git_op: undefined,
+      git_status: EMPTY_STATUS,
+      git_branch_state: branchState(),
+      git_merge_state: mergeState("none"),
+    });
+
+    await expect(useGitStore.getState().concludeOp("abort")).resolves.toBe(true);
+
+    expect(invokeMock).toHaveBeenCalledWith("git_op", { repoRoot: "/repo", action: "abort" });
+    expect(useGitStore.getState().notice).toBe("Aborted the merge");
   });
 
   it("resolves a whole path and refreshes", async () => {
@@ -590,7 +632,7 @@ describe("gitStore merge actions", () => {
       git_resolve_path: undefined,
       git_status: EMPTY_STATUS,
       git_branch_state: branchState(),
-      git_merge_state: { kind: "none", mergingRef: null },
+      git_merge_state: mergeState("none"),
     });
 
     await expect(

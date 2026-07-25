@@ -378,26 +378,28 @@ export function MergeBranchDialog({ from, into, onMerge, onClose }: MergeBranchD
   );
 }
 
-interface AbortMergeDialogProps {
-  /** What is being merged in, for the sentence. */
+interface AbortOpDialogProps {
+  /** The git subcommand behind the operation: `merge`, `rebase`, … */
+  family: string;
+  /** What is being applied, for the sentence. */
   mergingRef: string | null;
   onAbort: () => void;
   onClose: () => void;
 }
 
-export function AbortMergeDialog({ mergingRef, onAbort, onClose }: AbortMergeDialogProps) {
-  const subject = mergingRef === null ? "this merge" : `the merge of ${mergingRef}`;
+export function AbortOpDialog({ family, mergingRef, onAbort, onClose }: AbortOpDialogProps) {
+  const subject = mergingRef === null ? `this ${family}` : `the ${family} of ${mergingRef}`;
   return (
     <Modal
-      title="Abort the merge?"
+      title={`Abort the ${family}?`}
       onClose={onClose}
       actions={
         <>
           <button type="button" className="modal-button" onClick={onClose}>
-            Keep merging
+            Keep going
           </button>
           <button type="button" className="modal-button modal-button--danger" onClick={onAbort}>
-            Abort merge
+            {`Abort ${family}`}
           </button>
         </>
       }
@@ -406,8 +408,54 @@ export function AbortMergeDialog({ mergingRef, onAbort, onClose }: AbortMergeDia
         {`Aborting throws ${subject} away and puts the working tree back as it was before it started.`}
       </p>
       {/* The one thing that is genuinely lost, said plainly: git restores the
-          pre-merge tree, which includes undoing every resolution made so far. */}
+          pre-operation tree, which includes undoing every resolution made so far. */}
       <p className="modal-hint">Any conflicts you have already resolved will be discarded.</p>
+    </Modal>
+  );
+}
+
+interface SkipCommitDialogProps {
+  /** `rebase`, `cherry-pick` or `revert` — a merge has no commit to skip. */
+  family: string;
+  /** Subject of the commit being dropped, where it is known. */
+  subject: string | null;
+  onSkip: () => void;
+  onClose: () => void;
+}
+
+/**
+ * Confirm dropping the commit an operation is stuck on.
+ *
+ * Behind a confirm because `--skip` is destructive in a way that is easy to miss:
+ * it does not skip the *conflict*, it drops that commit's changes entirely and
+ * moves on. The wording says so rather than calling it "skip".
+ */
+export function SkipCommitDialog({ family, subject, onSkip, onClose }: SkipCommitDialogProps) {
+  return (
+    <Modal
+      title="Drop this commit?"
+      onClose={onClose}
+      actions={
+        <>
+          <button type="button" className="modal-button" onClick={onClose}>
+            Keep it
+          </button>
+          <button type="button" className="modal-button modal-button--danger" onClick={onSkip}>
+            Drop commit
+          </button>
+        </>
+      }
+    >
+      <p className="modal-text">
+        {subject === null
+          ? `The ${family} will move on to the next commit without applying this one.`
+          : `“${subject}” will not be applied. The ${family} moves on to the next commit.`}
+      </p>
+      <p className="modal-hint">
+        {/* Said plainly, because "skip" sounds like it skips the conflict. */}
+        That commit&apos;s changes are dropped, not merged. Use this when its changes are already
+        present some other way.
+      </p>
     </Modal>
   );
 }

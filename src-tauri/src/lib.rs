@@ -4,6 +4,7 @@ pub mod diff;
 pub mod git;
 pub mod gitops;
 pub mod merge;
+pub mod mergechunks;
 pub mod pty;
 pub mod remote;
 pub mod spawn;
@@ -49,11 +50,10 @@ pub fn run() {
             commands::git_remote_op,
             commands::git_cancel_op,
             commands::git_merge_state,
-            commands::git_conflict_file,
+            commands::git_conflict_stages,
             commands::git_merge,
-            commands::git_merge_continue,
-            commands::git_merge_abort,
-            commands::git_resolve_conflict,
+            commands::git_op,
+            commands::git_write_resolved,
             commands::git_resolve_path
         ])
         .on_window_event(|window, event| {

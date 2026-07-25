@@ -25,3 +25,4 @@ thiserror = "2"
 notify-debouncer-mini = "0.7.0"
 # Atomic saves in `diff`: write a sibling temp file, then rename onto the target.
 tempfile = "3.27.0"
+similar = "3.1.1"

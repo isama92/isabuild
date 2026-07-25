@@ -1,7 +1,11 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "merge",
-  "description": "Merge windows (one per conflicted file, label merge-<hash>): core APIs including events, plus closing themselves. No `destroy` needed, unlike the diff windows: the conflict pane is read-only, so there is no buffer to flush before the close goes through.",
+  "description": "Merge windows (one per conflicted file, label merge-<hash>): core APIs including events, plus closing themselves. `destroy` is needed as well as `close` from Part 7 on: the result buffer lives in memory until every conflict is decided, so a close with work outstanding is intercepted, confirmed, and only then destroyed — a plain `close` would re-enter the same handler.",
   "windows": ["merge-*"],
-  "permissions": ["core:default", "core:window:allow-close"]
+  "permissions": [
+    "core:default",
+    "core:window:allow-close",
+    "core:window:allow-destroy"
+  ]
 }

@@ -14,12 +14,15 @@
 import { create } from "zustand";
 import { getStatus, type ConflictEntry, type FileEntry } from "../lib/gitStatus";
 import {
-  abortMerge as invokeAbortMerge,
-  continueMerge as invokeContinueMerge,
   getMergeState,
   mergeRef,
+  opCommand,
+  opFailureTitle,
+  opSuccessNotice,
   resolvePath as invokeResolvePath,
+  runOp as invokeRunOp,
   type MergeState,
+  type OpAction,
   type PathResolution,
 } from "../lib/gitMerge";
 import {
@@ -107,8 +110,15 @@ export interface GitState {
    * outcome, not a failure.
    */
   mergeBranch: (reference: string) => Promise<boolean>;
-  continueMerge: () => Promise<boolean>;
-  abortMerge: () => Promise<boolean>;
+  /**
+   * Continue, skip or abort whatever is in progress — a merge, rebase,
+   * cherry-pick or revert.
+   *
+   * Only the *action* is sent; which git command carries it out is decided in the
+   * backend from a state it reads itself, so a stale `mergeState` here cannot
+   * send `rebase --abort` at a merge.
+   */
+  concludeOp: (action: OpAction) => Promise<boolean>;
   /** Resolve a whole conflicted path (the kinds with no markers). */
   resolveConflictPath: (path: string, resolution: PathResolution) => Promise<boolean>;
 
@@ -297,25 +307,19 @@ export const useGitStore = create<GitState>((set, get) => {
       return !outcome.conflicted;
     },
 
-    continueMerge: () =>
-      mutate(
-        "Could not complete the merge",
-        () => invokeContinueMerge(get().repoRoot ?? ""),
-        "git merge --continue",
+    concludeOp: (action) => {
+      // The kind is only used to *describe* what happened, never to choose the
+      // command — see the action's doc comment.
+      const kind = get().mergeState?.kind ?? "none";
+      return mutate(
+        opFailureTitle(kind, action),
+        () => invokeRunOp(get().repoRoot ?? "", action),
+        opCommand(kind, action) ?? undefined,
       ).then((ok) => {
-        if (ok) set({ notice: "Merge committed" });
+        if (ok) set({ notice: opSuccessNotice(kind, action) });
         return ok;
-      }),
-
-    abortMerge: () =>
-      mutate(
-        "Could not abort the merge",
-        () => invokeAbortMerge(get().repoRoot ?? ""),
-        "git merge --abort",
-      ).then((ok) => {
-        if (ok) set({ notice: "Merge aborted" });
-        return ok;
-      }),
+      });
+    },
 
     resolveConflictPath: (path, resolution) =>
       mutate(`Could not resolve ${path}`, () =>

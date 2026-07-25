@@ -139,6 +139,64 @@ pub fn repo_with_delete_modify_branches() -> tempfile::TempDir {
     dir
 }
 
+/// A repo stopped part-way through a **conflicting rebase** of `feature` onto
+/// `main`, on the *second* of two replayed commits.
+///
+/// Two commits rather than one so `msgnum`/`end` have something to count and
+/// `--skip` has somewhere to go: with a single commit, skipping it ends the rebase
+/// and the "N of M" the banner shows would always read "1 of 1".
+///
+/// The rebase is started with the fixture's own git, not the code under test —
+/// Part 7 drives an in-progress rebase, it does not start one.
+pub fn repo_with_rebase_conflict() -> tempfile::TempDir {
+    let dir = repo_with_commit("file.txt", "one\ntwo\nthree\n");
+    git_in(dir.path(), &["switch", "--quiet", "-c", "feature"]);
+    // A first commit that replays cleanly, then one that cannot.
+    write(dir.path(), "extra.txt", "from feature\n");
+    commit_all(dir.path(), "feature adds a file");
+    write(dir.path(), "file.txt", "one\ntwo from feature\nthree\n");
+    commit_all(dir.path(), "feature edits the shared line");
+    git_in(dir.path(), &["switch", "--quiet", "main"]);
+    write(dir.path(), "file.txt", "one\ntwo from main\nthree\n");
+    commit_all(dir.path(), "main edits the shared line");
+
+    git_in(dir.path(), &["switch", "--quiet", "feature"]);
+    // Expected to stop on the conflict, so the exit code is not asserted.
+    let output = git_raw(dir.path(), &["rebase", "main"]);
+    assert!(
+        !output.status.success(),
+        "the fixture's rebase was supposed to conflict"
+    );
+    dir
+}
+
+/// A repo stopped part-way through a **conflicting cherry-pick**: `main` picks a
+/// commit from `feature` that touches the same line.
+pub fn repo_with_cherry_pick_conflict() -> tempfile::TempDir {
+    let dir = repo_with_commit("file.txt", "one\ntwo\nthree\n");
+    git_in(dir.path(), &["switch", "--quiet", "-c", "feature"]);
+    write(dir.path(), "file.txt", "one\ntwo from feature\nthree\n");
+    commit_all(dir.path(), "feature edits the shared line");
+    let sha = rev_parse(dir.path(), "feature");
+    git_in(dir.path(), &["switch", "--quiet", "main"]);
+    write(dir.path(), "file.txt", "one\ntwo from main\nthree\n");
+    commit_all(dir.path(), "main edits the shared line");
+
+    let output = git_raw(dir.path(), &["cherry-pick", &sha]);
+    assert!(
+        !output.status.success(),
+        "the fixture's cherry-pick was supposed to conflict"
+    );
+    dir
+}
+
+/// Full sha of `reference`.
+pub fn rev_parse(dir: &Path, reference: &str) -> String {
+    let output = git_raw(dir, &["rev-parse", reference]);
+    assert!(output.status.success(), "rev-parse {reference} failed");
+    String::from_utf8_lossy(&output.stdout).trim().to_string()
+}
+
 /// Path of the bare remote inside a [`repo_with_bare_remote`] fixture.
 pub fn bare_remote_path(dir: &Path) -> std::path::PathBuf {
     dir.join("origin.git")
