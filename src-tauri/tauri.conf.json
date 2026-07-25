@@ -15,7 +15,9 @@
         "label": "main",
         "title": "isabuild",
         "width": 1200,
-        "height": 800
+        "height": 800,
+        "minWidth": 800,
+        "minHeight": 500
       }
     ],
     "security": {
@@ -25,12 +27,33 @@
   "bundle": {
     "active": true,
     "targets": "all",
+    "category": "DeveloperTool",
+    "publisher": "isabuild",
+    "copyright": "Copyright © 2026 isabuild contributors",
+    "shortDescription": "Claude Code in a terminal, wrapped with live git tooling",
+    "longDescription": "A cross-platform desktop app that embeds Claude Code in a terminal and wraps it with live git tooling: a real-time changed-files panel, a diff viewer, branch and remote operations, and a graphical three-pane merge conflict resolver.",
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",
       "icons/128x128@2x.png",
       "icons/icon.icns",
       "icons/icon.ico"
-    ]
+    ],
+    "linux": {
+      "deb": {
+        "depends": ["git"]
+      },
+      "rpm": {
+        "depends": ["git"]
+      }
+    },
+    "macOS": {
+      "minimumSystemVersion": "10.15"
+    },
+    "windows": {
+      "nsis": {
+        "installMode": "currentUser"
+      }
+    }
   }
 }

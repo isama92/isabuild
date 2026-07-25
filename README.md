@@ -24,6 +24,36 @@ npm test               # frontend tests (vitest)
 
 Prerequisites: Rust stable, Node 20+, system `git` **2.23 or newer** (branch switching uses `git switch`), and [Claude Code](https://docs.claude.com/en/docs/claude-code) installed. On Windows, Git for Windows is required.
 
+### Settings
+
+Settings live in one JSON file, in the OS's own config directory:
+
+| OS | Path |
+|---|---|
+| Linux | `~/.config/com.isabuild.desktop/config.json` |
+| macOS | `~/Library/Application Support/com.isabuild.desktop/config.json` |
+| Windows | `%APPDATA%\com.isabuild.desktop\config.json` |
+
+It holds the theme, the monospace font and size, keybinding overrides, and the recent
+projects. Every field is optional, so it is safe to hand-edit down to the one key you care
+about. A file that cannot be parsed is renamed to `config.json.bak` rather than overwritten,
+and the app starts from defaults and says so. Deleting the file resets everything.
+
+### Installing a build
+
+`npm run tauri build` and the **Bundle installers** workflow both produce **unsigned**
+installers. They install and run, but the OS will say it cannot verify them:
+
+- **macOS**: Gatekeeper refuses the first launch. Right-click the app and choose Open, or
+  System Settings → Privacy & Security → Open Anyway.
+- **Windows**: SmartScreen shows "Windows protected your PC". More info → Run anyway. The
+  NSIS installer installs per-user, so it needs no administrator prompt.
+- **Linux**: the `.deb` and `.rpm` declare `git` as a dependency; the AppImage does not, so
+  make sure `git` is on `PATH`.
+
+Signing and notarisation are deliberately out of scope; they need certificates that are not
+in this repository.
+
 ## Roadmap
 
 Each part is an independent plan (see `plans/`), executed in order. A part is done only when its acceptance criteria pass on macOS, Linux and Windows. Tick the box when a part is completed.
@@ -49,8 +79,19 @@ Each part is an independent plan (see `plans/`), executed in order. A part is do
 - [x] **Part 7 — Full 3-pane merge editor** (`plans/PLAN-7-three-pane-merge-editor.md`)
   JetBrains-style ours | result | theirs on CodeMirror 6, replacing Part 6's marker view. The chunk model is rebuilt from the index stages (`ls-files -u` + the blobs) rather than from the markers on disk, so a change only one side made is visible and reversible too, not just the regions git could not decide: non-conflicting changes arrive auto-applied, and every chunk has gutter arrows plus ours/theirs/both/base. The result pane is editable, undecided conflicts sit in it as real marker text, and the file writes itself once and stages the instant the last marker goes. A file edited since git wrote it is detected against `git merge-file`'s own output and the user chooses which version to open. Panes scroll in proportion, with next/previous conflict to move between them. And because the stages look the same for one, a **rebase, cherry-pick or revert is now driven** rather than just named — continue / skip / abort, with `--skip` behind a confirm that says the commit is dropped.
 
-- [ ] **Part 8 — Polish & packaging**
-  Themes, settings, keybindings, PTY cleanup on close, Tauri bundling and signing.
+- [ ] **Part 8 — Polish & packaging** (`plans/PLAN-8-polish-and-packaging.md`)
+  A **File menu** (native: Open Folder, Open Recent, Close Project, Settings, Exit) and the
+  concept of an open **project** that the app did not have. Before this, the repo came from
+  wherever the app happened to be launched; now it is chosen, remembered, and reopened next
+  launch, with a **welcome screen** listing the last five and marking any that have gone or
+  are no longer a repo. Closing or switching kills the workspace PTYs and closes the diff and
+  merge windows, after a confirmation, because both end a running Claude Code session.
+  Settings live in `config.json` in the OS config directory and get their own window:
+  **light and dark themes** that reach the workspace, both terminals and every diff and merge
+  window live, a **monospace font** for the terminals and both editors (pick a Nerd Font and
+  your shell prompt's icons render), and **rebindable shortcuts** with conflict detection.
+  Bundles carry proper metadata and declare `git` as a dependency. Signing is not done: see
+  "Installing a build" below.
 
 - [ ] **Part 9 - When there are no changes, on the sidebar the "No changes" text flickers**
 
