@@ -35,5 +35,19 @@ npm run lint                                       # eslint + tsc --noEmit
 - Every feature ships with tests in the same step: Rust backend logic gets `cargo test` cases (unit-test the parsers — git status/branch output, chunk models — against fixture strings; PTY code gets integration tests where feasible), frontend components/pages get `vitest` cases, covering the negative paths too. Both suites must be green before you commit.
 - Before committing a completed step, run a read-only review subagent over the uncommitted changes (`git status` / `git diff` / `git diff --staged`). Brief it explicitly (it has none of this conversation's context): what the feature does, its acceptance criteria, and to follow this CLAUDE.md. It reports only, never edits. Then triage: fix real issues, skip false positives, note your calls. Re-run the suites if a fix touched code, then commit. (The `ship` skill runs this flow.)
 - Commit per completed step with a descriptive message; the pre-commit hook must pass.
+- PR titles must be Conventional Commits (`feat:`, `fix:`, `feat!:`, `ci:`, `chore:`, …), enforced by `conventions.yml`. PRs are squash-merged, so the title becomes the commit on `main` that release-plz reads to pick the next version. A roadmap part is titled like `feat: part 10 — <name>`.
+- `conventions.yml` also applies one type label per PR automatically, from that same title prefix: `feat:` → `feature`, `fix:` → `bug`, `docs:` → `documentation`, anything else → `chore`. Exactly one of the four at a time — it removes the other three. The label is **cosmetic, for filtering PRs in the UI, and plays no part in versioning**: release-plz reads the Conventional Commit prefix off the squashed commit message, never a GitHub label. So labelling is best-effort and never fails the check (a missing label only logs a warning), and hand-editing a label changes nothing about the release.
+- The repo needs all four labels to exist for that to be more than a warning. `bug` and `documentation` ship with every GitHub repo; **`feature` and `chore` do not and were created by hand.** Recreate them on a fork or the labeller degrades to warnings.
 - A roadmap part is only checked off when its acceptance criteria are verified on macOS, Linux and Windows (ask the user to confirm platforms you cannot test yourself).
+
+## Versioning and releases
+
+Versioning is automated by release-plz. **Never hand-edit a version in a feature PR.**
+
+- **`src-tauri/Cargo.toml` is the single source of truth.** `src-tauri/tauri.conf.json` deliberately has no `version` key so Tauri falls back to the manifest; a test in `src-tauri/src/lib.rs` fails if anyone re-adds one. `package.json`/`package-lock.json` carry the same version only because npm wants one — `release-plz.yml` syncs them into the release PR.
+- **Two steps.** Push to `main` → release-plz opens a `chore: release X.Y.Z` PR bumping `src-tauri/Cargo.toml`, `src-tauri/Cargo.lock`, `CHANGELOG.md` and the npm pair. Merging *that* PR tags `vX.Y.Z` and publishes the GitHub release, which triggers `release.yml` to build and attach the Linux/Windows/macOS installers.
+- `release-plz.yml` must pass `manifest_path: src-tauri/Cargo.toml`. There is no root `Cargo.toml`; without it release-plz reads the repo root, finds no manifest and fails before doing anything.
+- **`release-plz.yml` must use `secrets.RELEASE_PLZ_TOKEN`, never `GITHUB_TOKEN`.** A release created by `GITHUB_TOKEN` fires no `release` event, so `release.yml` would never run and the release would ship with no installers.
+- Do not add `publish = false` to `src-tauri/Cargo.toml`. It marks the package non-publishable, which makes release-plz skip tagging entirely. The crates.io publish is blocked in `.github/release-plz.toml` instead.
+- Third-party actions are pinned by commit SHA with a version comment; keep the pinning when editing a workflow.
 

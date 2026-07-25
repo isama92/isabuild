@@ -205,3 +205,23 @@ pub fn run() {
             }
         });
 }
+
+#[cfg(test)]
+mod tests {
+    /// `tauri.conf.json` deliberately carries no `version` key, so Tauri falls
+    /// back to `src-tauri/Cargo.toml` — the one file release-plz bumps.
+    ///
+    /// Fails if anyone re-adds a hardcoded version to the config: two sources of
+    /// truth drift silently, and the symptom surfaces late and confusingly as an
+    /// installer whose filename disagrees with the version the app reports.
+    #[test]
+    fn app_version_comes_from_the_cargo_manifest() {
+        // Annotated because `Context` is generic over the runtime, which only
+        // `Builder::default()` infers for us in `run()`.
+        let context: tauri::Context<tauri::Wry> = tauri::generate_context!();
+        assert_eq!(
+            context.package_info().version.to_string(),
+            env!("CARGO_PKG_VERSION")
+        );
+    }
+}

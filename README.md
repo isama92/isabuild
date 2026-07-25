@@ -41,8 +41,20 @@ and the app starts from defaults and says so. Deleting the file resets everythin
 
 ### Installing a build
 
-`npm run tauri build` and the **Bundle installers** workflow both produce **unsigned**
-installers. They install and run, but the OS will say it cannot verify them:
+Every release carries prebuilt installers, so no toolchain is needed to run the app —
+grab one from the [Releases page](https://github.com/isama92/isabuild/releases):
+
+| OS | Asset |
+|---|---|
+| Linux | `.deb`, `.rpm` (both declare `git`), or `.AppImage` |
+| Windows | `*-setup.exe` (NSIS, per-user) |
+| macOS | `*_universal.dmg` (Intel and Apple Silicon) |
+
+Each asset ships a matching `.sha256`. To install the deb, prefer `apt` over `dpkg -i` so
+the `git` dependency resolves: `sudo apt install ./isabuild_<version>_amd64.deb`.
+
+`npm run tauri build`, the **Bundle installers** workflow and the released installers are
+all **unsigned**. They install and run, but the OS will say it cannot verify them:
 
 - **macOS**: Gatekeeper refuses the first launch. Right-click the app and choose Open, or
   System Settings → Privacy & Security → Open Anyway.
@@ -53,6 +65,28 @@ installers. They install and run, but the OS will say it cannot verify them:
 
 Signing and notarisation are deliberately out of scope; they need certificates that are not
 in this repository.
+
+### Releases
+
+Versioning and releases are automated by [release-plz](https://release-plz.dev), driven by
+Conventional Commit PR titles. Nobody edits a version by hand.
+
+1. A PR merges to `main`. Because PRs are squash-merged, its `feat:`/`fix:`/… title becomes
+   the commit release-plz reads to pick the next version.
+2. `release-plz.yml` opens a `chore: release X.Y.Z` PR bumping `src-tauri/Cargo.toml`,
+   `src-tauri/Cargo.lock`, `CHANGELOG.md` and the npm pair. Review it like any other PR.
+3. Merging it tags `vX.Y.Z` and publishes the GitHub release, which triggers `release.yml`
+   to build the installers above and attach them.
+
+`src-tauri/Cargo.toml` is the single source of truth for the version: `tauri.conf.json` has
+no `version` key, so Tauri reads the manifest, and a test in `src-tauri/src/lib.rs` fails if
+that ever stops being true.
+
+This needs one repository secret, **`RELEASE_PLZ_TOKEN`** — a fine-grained PAT (or GitHub App
+token) with *Contents: read/write* and *Pull requests: read/write*. It cannot be replaced by
+the built-in `GITHUB_TOKEN`: a release created by that token fires no `release` event, so
+`release.yml` would never run and every release would ship with no installers. Repository
+settings must also allow GitHub Actions to create pull requests.
 
 ## Known limitations
 

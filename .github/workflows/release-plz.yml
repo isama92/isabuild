@@ -1,0 +1,98 @@
+name: Release-plz
+
+# Versioning is automated, never hand-edited. src-tauri/Cargo.toml is the single
+# source of truth for the app version (tauri.conf.json deliberately has no
+# `version` key, so Tauri reads the manifest).
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: write
+  pull-requests: write
+
+# Never cancel a release mid-flight.
+concurrency:
+  group: release-plz-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  release-plz:
+    name: Release-plz
+    runs-on: ubuntu-22.04
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          # release-plz needs full history + tags to build the changelog and
+          # find the last release.
+          fetch-depth: 0
+          # Use the PAT (not GITHUB_TOKEN) so the release PR and the published
+          # release can trigger other workflows (ci.yml, release.yml). A release
+          # created by GITHUB_TOKEN fires no event, which would leave every
+          # release with no installers attached.
+          token: ${{ secrets.RELEASE_PLZ_TOKEN }}
+          # Keep that token in the local git config so the npm sync step below
+          # can push its extra commit onto the release PR branch.
+          persist-credentials: true
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30 # stable
+        with:
+          toolchain: stable
+
+      # Only for `npm version` in the sync step; nothing here builds the app.
+      - name: Install Node
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        with:
+          node-version: 24
+
+      # No command specified: the action runs `release-pr` (open/update the
+      # "chore: release X.Y.Z" PR) and `release` (tag + GitHub release once that
+      # PR is merged). No crates.io publish because .github/release-plz.toml
+      # sets publish = false.
+      #
+      # manifest_path has no counterpart in isamedia's copy of this workflow,
+      # which is a single crate at the repo root. isabuild has no root
+      # Cargo.toml, so without it release-plz looks in the repo root, finds no
+      # manifest, and fails before doing anything at all.
+      - name: Run release-plz
+        id: release-plz
+        uses: release-plz/action@e8792575c7f2366cf6ff3ccc33ead9ace5b691c7 # v0.5.130
+        with:
+          config: .github/release-plz.toml
+          manifest_path: src-tauri/Cargo.toml
+        env:
+          GITHUB_TOKEN: ${{ secrets.RELEASE_PLZ_TOKEN }}
+
+      # release-plz only knows how to bump Cargo manifests, but package.json and
+      # package-lock.json carry the same version. Sync them into the release PR
+      # so the repo never disagrees with itself about what version it is.
+      #
+      # Gate on prs_created rather than on the `pr` output: when no release PR is
+      # opened, `pr` is the literal string "{}", not empty, so a `!= ''` test
+      # would always pass and `gh pr checkout null` would then fail the job on
+      # every merge that produces no release PR — including the merge of the
+      # release PR itself.
+      - name: Sync npm version into the release PR
+        if: steps.release-plz.outputs.prs_created == 'true'
+        env:
+          GITHUB_TOKEN: ${{ secrets.RELEASE_PLZ_TOKEN }}
+          PR: ${{ steps.release-plz.outputs.pr }}
+        run: |
+          set -euo pipefail
+          gh pr checkout "$(jq -r .number <<<"$PR")"
+          # Read the version release-plz just wrote rather than re-deriving it,
+          # so the two can never disagree.
+          version="$(cargo metadata --no-deps --format-version 1 \
+            --manifest-path src-tauri/Cargo.toml | jq -r '.packages[0].version')"
+          npm version "$version" --no-git-tag-version --allow-same-version
+          if git diff --quiet; then
+            echo "package.json already at $version, nothing to sync"
+          else
+            git config user.name 'github-actions[bot]'
+            git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+            git commit -am "chore: sync npm version to $version"
+            git push
+          fi
