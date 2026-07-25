@@ -46,11 +46,30 @@ Each part is an independent plan (see `plans/`), executed in order. A part is do
 - [x] **Part 6 — Merge conflicts MVP** (`plans/PLAN-6-merge-conflicts-mvp.md`)
   Merge from a branch row in the branch menu, and a conflicted repo you can get out of without the shell. Conflicts get their own **Conflicts** group in the Status panel (carrying git's `u XY` kind) under a banner saying what is merging into what, how many are left, and offering Continue / Abort. A conflicted file opens its own `merge-<hash>` window: the whole file read-only, each conflict as a block with Accept ours / theirs / both, and the file staged automatically the moment its last marker goes. Conflicts with no text to merge — delete/modify, one-sided add, both-deleted, binary — take a whole-file decision instead. `--no-edit` and `GIT_EDITOR=true` throughout, so a merge commit can never sit waiting on an editor nobody can see. A conflicting pull and a stash that would not reapply land in the same UI; a rebase, cherry-pick or revert is named and left alone.
 
-- [ ] **Part 7 — Full 3-pane merge editor** (`plans/PLAN-7-three-pane-merge-editor.md`)
+- [x] **Part 7 — Full 3-pane merge editor** (`plans/PLAN-7-three-pane-merge-editor.md`)
   JetBrains-style ours | result | theirs on CodeMirror 6, replacing Part 6's marker view. The chunk model is rebuilt from the index stages (`ls-files -u` + the blobs) rather than from the markers on disk, so a change only one side made is visible and reversible too, not just the regions git could not decide: non-conflicting changes arrive auto-applied, and every chunk has gutter arrows plus ours/theirs/both/base. The result pane is editable, undecided conflicts sit in it as real marker text, and the file writes itself once and stages the instant the last marker goes. A file edited since git wrote it is detected against `git merge-file`'s own output and the user chooses which version to open. Panes scroll in proportion, with next/previous conflict to move between them. And because the stages look the same for one, a **rebase, cherry-pick or revert is now driven** rather than just named — continue / skip / abort, with `--skip` behind a confirm that says the commit is dropped.
 
 - [ ] **Part 8 — Polish & packaging**
   Themes, settings, keybindings, PTY cleanup on close, Tauri bundling and signing.
+
+- [ ] **Part 9 — Retire Monaco: one editor stack**
+  Replace Part 4's Monaco diff viewer with `@codemirror/merge`, leaving CodeMirror 6 as the only editor in the app.
+
+  **Why this exists.** Part 7 brought CodeMirror in for the merge editor, so the app now ships *two* full editor stacks doing overlapping jobs: two syntax-highlighting registries, two theme definitions, two sets of test shims, two mental models. `@codemirror/merge`'s `MergeView` already covers most of what Part 4 needs — side-by-side panes, one editable side, built-in revert controls (Part 4's `»` restore-a-block arrow), intra-line highlighting — and it aligns the two documents with **spacer blocks**, which is strictly better than the proportional scroll sync Part 7 settled for.
+
+  **Pros**
+  - One editor stack and one highlighting source (`@codemirror/language-data`, already a dependency). `lib/diffLanguage.ts` and its Monaco-registry tests are deleted, and both windows highlight identically *by construction* instead of by coincidence.
+  - Much smaller: `monaco-editor` is 101 MB in `node_modules` against 12 MB for all of CodeMirror and Lezer, with a correspondingly smaller shipped bundle. `diff/monacoSetup.ts`, the editor-worker wiring, and the `vite.config.ts` gymnastics that keep Monaco out of the main bundle all go with it.
+  - Spacer-block alignment becomes available to the *merge* editor too, retiring Part 7's "the panes drift apart in a long file" limitation.
+  - Removes the only path by which the `dompurify` advisory reaches this project.
+
+  **Cons — the real cost; do not start without budgeting for these**
+  - **CodeMirror has no overview ruler.** "Green for added, blue for changed, red for removed, at the height of each change" is a Part 4 acceptance criterion that Monaco gave us for free. It becomes our own widget (a positioned strip beside the scroller, heights from the chunk list) plus tests, and `lib/diffMarkers.ts` gets rewritten around CodeMirror chunks instead of Monaco's `getLineChanges()`.
+  - **The diff moves onto the main thread.** Monaco computes it in the one worker it loads; `@codemirror/merge` computes it inline, so a few-thousand-line file may hitch when its window opens. **Measure this first** — if it is bad, the migration also needs a worker of our own and most of the simplification evaporates.
+  - The draggable sash between the panes, and the `ResizeObserver` that keeps the headers tracking it, have to be rebuilt (probably *simpler* with `react-resizable-panels`, already a dependency).
+  - Part 4's whole acceptance list needs re-verifying on all three OSes, including the auto-save and `shouldAdoptDiskContent` dance — subtle, and currently correct.
+
+  **Do not do this for security.** The `dompurify` advisory that arrives with Monaco is closed on its own by a `"dompurify": "^3.4.12"` entry in `package.json`'s `overrides` (Monaco pins `3.4.8` exactly, which is why npm cannot lift it unaided). Its vulnerable paths are rendered-markdown sanitising for hovers and suggestion docs, and `monacoSetup.ts` already excludes the worker-backed language services that would produce any — so the exposure here is theoretical. Do this part for the one-stack simplification and the bundle size, or leave it undone.
 
 ## Global decisions
 
