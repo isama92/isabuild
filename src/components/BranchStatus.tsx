@@ -3,6 +3,7 @@ import { BranchMenu, type BranchPick } from "./BranchMenu";
 import {
   DeleteBranchDialog,
   DirtySwitchDialog,
+  MergeBranchDialog,
   NewBranchDialog,
   OpErrorDialog,
   RenameBranchDialog,
@@ -25,16 +26,19 @@ type Dialog =
   | { kind: "new" }
   | { kind: "rename"; from: string }
   | { kind: "delete"; name: string; refusal: string | null }
-  | { kind: "dirty"; target: SwitchTarget };
+  | { kind: "dirty"; target: SwitchTarget }
+  | { kind: "merge"; reference: string };
 
 export function BranchStatus() {
   const repoRoot = useGitStore((state) => state.repoRoot);
   const branch = useGitStore((state) => state.branch);
   const staged = useGitStore((state) => state.staged);
   const unstaged = useGitStore((state) => state.unstaged);
+  const conflicts = useGitStore((state) => state.conflicts);
   const op = useGitStore((state) => state.op);
   const opError = useGitStore((state) => state.opError);
   const notice = useGitStore((state) => state.notice);
+  const mergeState = useGitStore((state) => state.mergeState);
   const requestShellCommand = useLayoutStore((state) => state.requestShellCommand);
 
   const [menuOpen, setMenuOpen] = useState(false);
@@ -54,7 +58,11 @@ export function BranchStatus() {
   const busy = op !== null;
   // The count the dirty-switch dialog reports. A file staged *and* modified
   // appears in both groups, which is the honest count of pending changes.
-  const changeCount = staged.length + unstaged.length;
+  //
+  // Conflicts count too. They are their own group since Part 6, and leaving them
+  // out made a repo whose only pending change is a conflict look clean — so a
+  // switch went straight to git with no prompt, and git refused it.
+  const changeCount = staged.length + unstaged.length + conflicts.length;
   const isDirty = changeCount > 0;
 
   const store = useGitStore.getState;
@@ -124,6 +132,17 @@ export function BranchStatus() {
   const goneDetail = branch.upstreamOnRemote
     ? `${branch.upstream ?? "The upstream"} no longer exists on the remote. Push to recreate it.`
     : `${branch.upstream ?? "The upstream"}, the local branch this tracked, no longer exists.`;
+  // Why the branch menu's Merge entries are unavailable, if they are. An unborn
+  // HEAD has nothing to merge into; anything already in progress has to be
+  // finished or aborted first (git would refuse anyway, but a disabled entry
+  // with a reason beats a modal full of git's refusal).
+  const mergeBlocked =
+    branch.unborn
+      ? "This branch has no commits yet"
+      : mergeState !== null && mergeState.kind !== "none"
+        ? "Finish or abort the operation in progress first"
+        : null;
+
   const fetchAge = fetchAgeLabel(branch.lastFetch, fetchNow);
   const fetchTitle = remote
     ? [`Fetch ${remote}`, fetchAge].filter((part) => part !== null).join(" — ")
@@ -281,6 +300,11 @@ export function BranchStatus() {
               setMenuOpen(false);
               setDialog({ kind: "delete", name, refusal: null });
             }}
+            onMerge={(reference) => {
+              setMenuOpen(false);
+              setDialog({ kind: "merge", reference });
+            }}
+            mergeBlocked={mergeBlocked}
           />
         )}
       </div>
@@ -315,6 +339,19 @@ export function BranchStatus() {
           refusal={dialog.refusal}
           onClose={() => setDialog(null)}
           onDelete={(force) => void confirmDelete(force)}
+        />
+      )}
+
+      {dialog?.kind === "merge" && (
+        <MergeBranchDialog
+          from={dialog.reference}
+          into={branch.current ?? "this branch"}
+          onClose={() => setDialog(null)}
+          onMerge={() => {
+            const { reference } = dialog;
+            setDialog(null);
+            void store().mergeBranch(reference);
+          }}
         />
       )}
 

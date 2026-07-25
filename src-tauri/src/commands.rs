@@ -11,6 +11,9 @@ use crate::branch::{self, BranchState, DirtyPolicy, SwitchOutcome, SwitchTarget}
 use crate::diff::{self, Eol, FileDiff};
 use crate::git::{self, GitError, GitStatus};
 use crate::gitops::GitOps;
+use crate::merge::{
+    self, ConflictChoice, ConflictFile, MergeOutcome, MergeState, PathResolution, ResolveOutcome,
+};
 use crate::pty::{PtyEvent, PtyManager, SpawnParams};
 use crate::remote::{self, OpEvent, RemoteOpSpec};
 use crate::spawn::{default_cwd, joined_command, shell_spec};
@@ -387,6 +390,90 @@ pub async fn git_cancel_op(
         );
     }
     Ok(())
+}
+
+// --- Part 6: merge conflicts -----------------------------------------------
+
+/// What the repository is in the middle of, for the banner above the file list.
+/// A read, so it takes no lock.
+#[tauri::command]
+pub async fn git_merge_state(repo_root: String) -> Result<MergeState, String> {
+    tauri::async_runtime::spawn_blocking(move || merge::merge_state(Path::new(&repo_root)))
+        .await
+        .map_err(|e| format!("merge state task failed: {e}"))?
+        .map_err(|e| e.to_string())
+}
+
+/// One conflicted file: its lines, its conflicts, and the revision a resolution
+/// has to quote back. A read.
+#[tauri::command]
+pub async fn git_conflict_file(repo_root: String, path: String) -> Result<ConflictFile, String> {
+    tauri::async_runtime::spawn_blocking(move || merge::conflict_file(Path::new(&repo_root), &path))
+        .await
+        .map_err(|e| format!("conflict file task failed: {e}"))?
+        .map_err(|e| e.to_string())
+}
+
+/// Merge `reference` into the current branch. A conflict is a successful outcome
+/// with `conflicted: true`, not an error — only a merge git refused fails.
+#[tauri::command]
+pub async fn git_merge(
+    ops: State<'_, GitOps>,
+    repo_root: String,
+    reference: String,
+) -> Result<MergeOutcome, String> {
+    with_op_lock(&ops, "merge", move || {
+        merge::merge(Path::new(&repo_root), &reference)
+    })
+    .await
+}
+
+#[tauri::command]
+pub async fn git_merge_continue(ops: State<'_, GitOps>, repo_root: String) -> Result<(), String> {
+    with_op_lock(&ops, "merge-continue", move || {
+        merge::continue_merge(Path::new(&repo_root))
+    })
+    .await
+}
+
+#[tauri::command]
+pub async fn git_merge_abort(ops: State<'_, GitOps>, repo_root: String) -> Result<(), String> {
+    with_op_lock(&ops, "merge-abort", move || {
+        merge::abort(Path::new(&repo_root))
+    })
+    .await
+}
+
+/// Apply one side of conflict `index` and stage the file if that was the last
+/// one. Takes the op lock: it writes into the working tree, so it must not
+/// interleave with a switch, a pull or another resolution.
+#[tauri::command]
+pub async fn git_resolve_conflict(
+    ops: State<'_, GitOps>,
+    repo_root: String,
+    path: String,
+    index: usize,
+    choice: ConflictChoice,
+    revision: String,
+) -> Result<ResolveOutcome, String> {
+    with_op_lock(&ops, "resolve-conflict", move || {
+        merge::resolve_conflict(Path::new(&repo_root), &path, index, choice, &revision)
+    })
+    .await
+}
+
+/// Resolve a whole conflicted path, for the kinds with no merged text.
+#[tauri::command]
+pub async fn git_resolve_path(
+    ops: State<'_, GitOps>,
+    repo_root: String,
+    path: String,
+    resolution: PathResolution,
+) -> Result<(), String> {
+    with_op_lock(&ops, "resolve-path", move || {
+        merge::resolve_path(Path::new(&repo_root), &path, resolution)
+    })
+    .await
 }
 
 /// (Re)start the debounced file watcher on `repo_root`; changes there emit

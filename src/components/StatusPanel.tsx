@@ -1,20 +1,29 @@
 import { useState } from "react";
+import { MergeBanner } from "./MergeBanner";
 import { useGitStore } from "../store/gitStore";
 import { useLayoutStore } from "../store/layoutStore";
-import type { ChangeStatus, FileEntry } from "../lib/gitStatus";
+import { conflictHasMarkers, type ChangeStatus, type ConflictEntry, type FileEntry } from "../lib/gitStatus";
+import { conflictActions, conflictLabel } from "../lib/conflictView";
+import type { PathResolution } from "../lib/gitMerge";
 import { openDiffWindow } from "../lib/diffWindow";
+import { openMergeWindow } from "../lib/mergeWindow";
 
-// Right-side git status region: changed files grouped into Staged Changes and
-// Changes (VS Code style), colored by status. Live data comes from the git
-// store, refreshed by useRepoWatch at the Layout root.
+// Right-side git status region: changed files grouped into Conflicts, Staged
+// Changes and Changes (VS Code style), colored by status. Live data comes from
+// the git store, refreshed by useRepoWatch at the Layout root.
 //
 // Clicking a row opens that file's diff in its own window (Part 4) — one window
 // per file, deduped, so clicking the same file again just focuses it. Every
 // row is clickable: untracked, deleted and binary files each render their own
 // state in the diff window rather than being dead ends here.
+//
+// Conflicts (Part 6) come first, because they block everything else, and they
+// route to the merge window instead. The ones with no conflict markers — a file
+// one side deleted, say — have nothing to show in a window, so they carry their
+// whole-file resolutions inline.
 
 // Single-letter badge per status: the git letter for tracked changes, "U" for
-// untracked, "!" for a conflict.
+// untracked.
 const STATUS_BADGE: Record<ChangeStatus, string> = {
   added: "A",
   modified: "M",
@@ -23,7 +32,6 @@ const STATUS_BADGE: Record<ChangeStatus, string> = {
   copied: "C",
   typeChanged: "T",
   untracked: "U",
-  unmerged: "!",
 };
 
 function FileRow({ entry, onOpen }: { entry: FileEntry; onOpen: (entry: FileEntry) => void }) {
@@ -75,6 +83,95 @@ function StatusGroup({
   );
 }
 
+function ConflictRow({
+  entry,
+  onOpen,
+  onResolve,
+}: {
+  entry: ConflictEntry;
+  onOpen: (entry: ConflictEntry) => void;
+  onResolve: (entry: ConflictEntry, resolution: PathResolution) => void;
+}) {
+  const slash = entry.path.lastIndexOf("/");
+  const dir = slash >= 0 ? entry.path.slice(0, slash + 1) : "";
+  const name = slash >= 0 ? entry.path.slice(slash + 1) : entry.path;
+  const kindLabel = conflictLabel(entry.kind);
+  const actions = conflictActions(entry.kind);
+  const openable = conflictHasMarkers(entry.kind);
+
+  return (
+    <li title={`${entry.path} — ${kindLabel}`}>
+      {/* A button only when there is something to open. A row that cannot lead
+          anywhere must not look like it can. */}
+      {openable ? (
+        <button type="button" className="status-row" onClick={() => onOpen(entry)}>
+          <span className="status-badge status-badge--conflict" aria-label={entry.kind}>
+            {"!"}
+          </span>
+          <span className="status-path">
+            {dir && <span className="status-path-dir">{dir}</span>}
+            <span className="status-path-name">{name}</span>
+          </span>
+        </button>
+      ) : (
+        <div className="status-row status-row--static">
+          <span className="status-badge status-badge--conflict" aria-label={entry.kind}>
+            {"!"}
+          </span>
+          <span className="status-path">
+            {dir && <span className="status-path-dir">{dir}</span>}
+            <span className="status-path-name">{name}</span>
+          </span>
+        </div>
+      )}
+      {actions.length > 0 && (
+        <div className="conflict-actions">
+          <span className="conflict-kind">{kindLabel}</span>
+          {actions.map((action) => (
+            <button
+              key={action.resolution}
+              type="button"
+              className={
+                action.destructive
+                  ? "conflict-action conflict-action--danger"
+                  : "conflict-action"
+              }
+              title={action.title}
+              onClick={() => onResolve(entry, action.resolution)}
+            >
+              {action.label}
+            </button>
+          ))}
+        </div>
+      )}
+    </li>
+  );
+}
+
+function ConflictGroup({
+  entries,
+  onOpen,
+  onResolve,
+}: {
+  entries: ConflictEntry[];
+  onOpen: (entry: ConflictEntry) => void;
+  onResolve: (entry: ConflictEntry, resolution: PathResolution) => void;
+}) {
+  if (entries.length === 0) return null;
+  return (
+    <section className="status-group status-group--conflicts">
+      <h3 className="status-group-title">
+        Conflicts <span className="status-group-count">{entries.length}</span>
+      </h3>
+      <ul className="status-list">
+        {entries.map((entry) => (
+          <ConflictRow key={entry.path} entry={entry} onOpen={onOpen} onResolve={onResolve} />
+        ))}
+      </ul>
+    </section>
+  );
+}
+
 export function StatusPanel() {
   const setStatusPanelVisible = useLayoutStore((state) => state.setStatusPanelVisible);
   const phase = useGitStore((state) => state.phase);
@@ -82,9 +179,10 @@ export function StatusPanel() {
   const repoRoot = useGitStore((state) => state.repoRoot);
   const staged = useGitStore((state) => state.staged);
   const unstaged = useGitStore((state) => state.unstaged);
+  const conflicts = useGitStore((state) => state.conflicts);
   const [openError, setOpenError] = useState<string | null>(null);
 
-  const isEmpty = staged.length === 0 && unstaged.length === 0;
+  const isEmpty = staged.length === 0 && unstaged.length === 0 && conflicts.length === 0;
 
   function openDiff(entry: FileEntry) {
     if (!repoRoot) {
@@ -99,6 +197,23 @@ export function StatusPanel() {
         setOpenError(cause instanceof Error ? cause.message : String(cause));
       },
     );
+  }
+
+  function openConflict(entry: ConflictEntry) {
+    if (!repoRoot) {
+      setOpenError("No repository resolved yet.");
+      return;
+    }
+    setOpenError(null);
+    openMergeWindow({ repoRoot, path: entry.path }).catch((cause: unknown) => {
+      setOpenError(cause instanceof Error ? cause.message : String(cause));
+    });
+  }
+
+  function resolveConflict(entry: ConflictEntry, resolution: PathResolution) {
+    // Failures land in the store's opError modal, which BranchStatus renders —
+    // the same route every other git mutation takes.
+    void useGitStore.getState().resolveConflictPath(entry.path, resolution);
   }
 
   return (
@@ -116,7 +231,11 @@ export function StatusPanel() {
         </button>
       </div>
       <div className="panel-body status-panel-body">
-        {/* Outside the branches below: a failure to open a diff window must stay
+        {/* Above the branches below: the merge banner has to stay visible even
+            when the last conflict has just been resolved, because that is
+            exactly when Continue becomes the thing to click. */}
+        <MergeBanner />
+        {/* Outside the branches too: a failure to open a diff window must stay
             readable even if the file list empties in the meantime. */}
         {openError !== null && (
           <p className="status-empty status-open-error" role="alert">
@@ -129,6 +248,12 @@ export function StatusPanel() {
           <p className="status-empty">No changes</p>
         ) : (
           <>
+            {/* Conflicts first: nothing else can be committed until they are gone. */}
+            <ConflictGroup
+              entries={conflicts}
+              onOpen={openConflict}
+              onResolve={resolveConflict}
+            />
             <StatusGroup title="Staged Changes" entries={staged} onOpen={openDiff} />
             <StatusGroup title="Changes" entries={unstaged} onOpen={openDiff} />
           </>

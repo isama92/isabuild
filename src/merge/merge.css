@@ -1,0 +1,198 @@
+/* Merge window chrome. Deliberately thin, like diff.css: a header row over a
+   scrolling read-only view of the conflicted file. Palette matches App.css so
+   all three windows read as one app.
+
+   Part 7 replaces the body of this window with a 3-pane CodeMirror editor; the
+   header, the notices and the shell below are what it will keep. */
+
+html,
+body,
+#root {
+  height: 100%;
+  width: 100%;
+  margin: 0;
+  padding: 0;
+  overflow: hidden;
+}
+
+body {
+  background: #1e1e1e;
+}
+
+.merge-window {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+  background: #1e1e1e;
+  color: #cccccc;
+  font: 12px/1.5 system-ui, sans-serif;
+}
+
+.merge-header {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  height: 28px;
+  padding: 0 12px;
+  background: #252526;
+  border-bottom: 1px solid #333;
+  user-select: none;
+}
+
+.merge-header-path {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: #d4d4d4;
+}
+
+.merge-header-count {
+  flex: 0 0 auto;
+  color: #e08f4c;
+}
+
+.merge-notice {
+  margin: 0;
+  padding: 6px 12px;
+  color: #b9b9b9;
+}
+
+.merge-notice--error {
+  color: #f14c4c;
+}
+
+.merge-body {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: auto;
+}
+
+.merge-whole-file {
+  padding: 8px 0;
+}
+
+/* The file itself is monospace and never wraps: a wrapped line would break the
+   correspondence between what is on screen and what is in the file. */
+.merge-file {
+  padding: 4px 0 24px;
+  font: 12px/1.5 "JetBrains Mono", ui-monospace, monospace;
+  white-space: pre;
+}
+
+.merge-line {
+  display: flex;
+  gap: 12px;
+  padding: 0 12px;
+}
+
+.merge-line-number {
+  flex: 0 0 auto;
+  width: 42px;
+  text-align: right;
+  color: #6a6a6a;
+  user-select: none;
+}
+
+.merge-line-text {
+  white-space: pre;
+}
+
+/* One block per conflict, indented from the surrounding context so the extent of
+   the conflict is obvious at a glance. */
+.merge-block {
+  margin: 6px 0;
+  border: 1px solid #6b4a1f;
+  border-radius: 3px;
+  background: #221d16;
+}
+
+.merge-block-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 4px 10px;
+  background: #2b2318;
+  border-bottom: 1px solid #6b4a1f;
+  font-family: system-ui, sans-serif;
+}
+
+.merge-block-count {
+  color: #e08f4c;
+}
+
+/* A half-edited block: no accept buttons, and why. */
+.merge-block-broken {
+  color: #f14c4c;
+  font: 11px/1.6 system-ui, sans-serif;
+  padding: 0 10px;
+}
+
+.merge-block-actions {
+  display: flex;
+  gap: 6px;
+  padding: 0 10px;
+}
+
+.merge-choice {
+  padding: 2px 8px;
+  border: 1px solid #3c3c3c;
+  border-radius: 2px;
+  background: #333;
+  color: #cccccc;
+  font: 12px/1.5 system-ui, sans-serif;
+  cursor: pointer;
+}
+
+.merge-choice:hover:not(:disabled) {
+  background: #3d3d3d;
+}
+
+.merge-choice:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.merge-section {
+  padding: 4px 0;
+}
+
+.merge-section-label {
+  margin: 0;
+  padding: 0 12px;
+  color: #8a8a8a;
+  font: 11px/1.6 system-ui, sans-serif;
+}
+
+.merge-section-empty {
+  margin: 0;
+  padding: 0 12px 0 66px;
+  color: #6a6a6a;
+  font: 11px/1.6 system-ui, sans-serif;
+}
+
+/* Ours green, theirs blue, base dimmed: the same green/blue split the diff
+   window uses for added and renamed, so the two windows agree on what a side
+   looks like. */
+.merge-line--ours {
+  background: rgba(137, 209, 133, 0.08);
+}
+
+.merge-line--theirs {
+  background: rgba(108, 182, 255, 0.08);
+}
+
+.merge-line--base {
+  background: rgba(255, 255, 255, 0.03);
+  color: #8a8a8a;
+}
+
+.merge-section--ours .merge-section-label {
+  color: #89d185;
+}
+
+.merge-section--theirs .merge-section-label {
+  color: #6cb6ff;
+}

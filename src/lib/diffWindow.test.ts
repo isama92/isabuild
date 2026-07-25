@@ -53,6 +53,25 @@ describe("diffWindowLabel", () => {
     );
   });
 
+  it("is the exact label it has always been", () => {
+    // Pinned to a literal on purpose. The label is how an already-open window is
+    // found again, and the hash inputs moved once already during the extraction
+    // into lib/fileWindow — invisibly, because the separator between the two
+    // fields is a NUL. Nothing else in the suite would have noticed.
+    expect(diffWindowLabel({ repoRoot: "/repo", path: "src/app.ts" })).toBe(
+      "diff-src_app_ts-cb9eaf13",
+    );
+  });
+
+  it("cannot confuse a space in the repo root with the field separator", () => {
+    // With a printable separator these two hash alike, and because the slug keeps
+    // only the tail of the path they can slugify alike too — the wrong-file
+    // collision the repo root is in the hash to prevent.
+    expect(diffWindowLabel({ repoRoot: "/repo", path: "a b/x.ts" })).not.toBe(
+      diffWindowLabel({ repoRoot: "/repo a", path: "b/x.ts" }),
+    );
+  });
+
   it("distinguishes the same relative path in two repositories", () => {
     // Every checkout has a src/a.ts; focusing the wrong repo's window would
     // show, and auto-save to, the wrong file.
