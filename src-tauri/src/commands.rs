@@ -12,7 +12,7 @@ use crate::diff::{self, Eol, FileDiff};
 use crate::git::{self, GitError, GitStatus};
 use crate::gitops::GitOps;
 use crate::merge::{
-    self, ConflictChoice, ConflictFile, MergeOutcome, MergeState, PathResolution, ResolveOutcome,
+    self, ConflictStages, MergeOutcome, MergeState, OpAction, PathResolution, ResolveOutcome,
 };
 use crate::pty::{PtyEvent, PtyManager, SpawnParams};
 use crate::remote::{self, OpEvent, RemoteOpSpec};
@@ -404,14 +404,20 @@ pub async fn git_merge_state(repo_root: String) -> Result<MergeState, String> {
         .map_err(|e| e.to_string())
 }
 
-/// One conflicted file: its lines, its conflicts, and the revision a resolution
-/// has to quote back. A read.
+/// One conflicted file for the three-pane editor: its index stages, the chunks
+/// between them, the buffer to open with, and the revision a write has to quote
+/// back. A read.
 #[tauri::command]
-pub async fn git_conflict_file(repo_root: String, path: String) -> Result<ConflictFile, String> {
-    tauri::async_runtime::spawn_blocking(move || merge::conflict_file(Path::new(&repo_root), &path))
-        .await
-        .map_err(|e| format!("conflict file task failed: {e}"))?
-        .map_err(|e| e.to_string())
+pub async fn git_conflict_stages(
+    repo_root: String,
+    path: String,
+) -> Result<ConflictStages, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        merge::conflict_stages(Path::new(&repo_root), &path)
+    })
+    .await
+    .map_err(|e| format!("conflict stages task failed: {e}"))?
+    .map_err(|e| e.to_string())
 }
 
 /// Merge `reference` into the current branch. A conflict is a successful outcome
@@ -428,36 +434,34 @@ pub async fn git_merge(
     .await
 }
 
+/// Continue, skip or abort whatever is in progress — a merge, a rebase, a
+/// cherry-pick or a revert. The argv follows from the state `merge::run_op` reads
+/// for itself, not from anything the frontend believes.
 #[tauri::command]
-pub async fn git_merge_continue(ops: State<'_, GitOps>, repo_root: String) -> Result<(), String> {
-    with_op_lock(&ops, "merge-continue", move || {
-        merge::continue_merge(Path::new(&repo_root))
+pub async fn git_op(
+    ops: State<'_, GitOps>,
+    repo_root: String,
+    action: OpAction,
+) -> Result<(), String> {
+    with_op_lock(&ops, "git-op", move || {
+        merge::run_op(Path::new(&repo_root), action)
     })
     .await
 }
 
+/// Write a fully resolved file and stage it. Takes the op lock: it writes into
+/// the working tree, so it must not interleave with a switch, a pull or another
+/// resolution.
 #[tauri::command]
-pub async fn git_merge_abort(ops: State<'_, GitOps>, repo_root: String) -> Result<(), String> {
-    with_op_lock(&ops, "merge-abort", move || {
-        merge::abort(Path::new(&repo_root))
-    })
-    .await
-}
-
-/// Apply one side of conflict `index` and stage the file if that was the last
-/// one. Takes the op lock: it writes into the working tree, so it must not
-/// interleave with a switch, a pull or another resolution.
-#[tauri::command]
-pub async fn git_resolve_conflict(
+pub async fn git_write_resolved(
     ops: State<'_, GitOps>,
     repo_root: String,
     path: String,
-    index: usize,
-    choice: ConflictChoice,
+    text: String,
     revision: String,
 ) -> Result<ResolveOutcome, String> {
-    with_op_lock(&ops, "resolve-conflict", move || {
-        merge::resolve_conflict(Path::new(&repo_root), &path, index, choice, &revision)
+    with_op_lock(&ops, "write-resolved", move || {
+        merge::write_resolved(Path::new(&repo_root), &path, &text, &revision)
     })
     .await
 }

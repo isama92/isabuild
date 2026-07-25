@@ -6,6 +6,7 @@ import { initialGitState, useGitStore } from "../store/gitStore";
 import { initialLayoutState, useLayoutStore } from "../store/layoutStore";
 import type { BranchState } from "../lib/gitBranch";
 import type { FileEntry } from "../lib/gitStatus";
+import { mergeState } from "../test/factories";
 
 // Validation is the only lib call the dialogs make; everything else goes through
 // the store, whose actions are stubbed per test.
@@ -492,7 +493,7 @@ describe("BranchStatus notices and errors", () => {
     // full of git's refusal.
     setup();
     act(() =>
-      useGitStore.setState({ mergeState: { kind: "merge", mergingRef: "feature" } }),
+      useGitStore.setState({ mergeState: mergeState("merge", { mergingRef: "feature" }) }),
     );
     fireEvent.click(screen.getByRole("button", { name: "Current branch" }));
     fireEvent.click(screen.getByRole("button", { name: "Actions for dev" }));

@@ -1,59 +1,106 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { MergeWindow } from "./MergeWindow";
-import { getConflictFile, resolveConflict, resolvePath } from "../lib/gitMerge";
+import { getConflictStages, resolvePath, writeResolved } from "../lib/gitMerge";
 import { onRepoChanged } from "../lib/gitStatus";
-import type { ConflictFile } from "../lib/gitMerge";
+import type { ConflictStages } from "../lib/gitMerge";
 
 vi.mock("../lib/gitMerge", async (importOriginal) => {
-  // parseMergeParams is pure and under test elsewhere; only the IPC is faked.
+  // parseMergeParams and the naming helpers are pure and tested elsewhere; only
+  // the IPC is faked.
   const actual = await importOriginal<typeof import("../lib/gitMerge")>();
   return {
     ...actual,
-    getConflictFile: vi.fn(),
-    resolveConflict: vi.fn(),
+    getConflictStages: vi.fn(),
+    writeResolved: vi.fn(),
     resolvePath: vi.fn(),
   };
 });
 vi.mock("../lib/gitStatus", () => ({ onRepoChanged: vi.fn() }));
 
-const closeMock = vi.fn();
-vi.mock("@tauri-apps/api/window", () => ({
-  getCurrentWindow: () => ({ close: closeMock }),
+// MergePanes is stubbed for the same reason DiffWindow.test stubs DiffPane: this
+// file is about what the *window* decides — which text to open, when to write,
+// what to do with a reload — and a real CodeMirror mount measures nothing under
+// jsdom. The stub exposes the one hook the window's behaviour runs through.
+vi.mock("./MergePanes", () => ({
+  MergePanes: ({
+    value,
+    onChange,
+    busy,
+  }: {
+    value: string;
+    onChange: (text: string) => void;
+    busy: boolean;
+  }) => (
+    <div data-testid="panes" data-busy={busy}>
+      <textarea
+        aria-label="result buffer"
+        value={value}
+        onChange={(event) => onChange(event.target.value)}
+      />
+    </div>
+  ),
 }));
 
-const getConflictFileMock = vi.mocked(getConflictFile);
-const resolveConflictMock = vi.mocked(resolveConflict);
+const closeMock = vi.fn();
+const destroyMock = vi.fn();
+let closeRequested: ((event: { preventDefault: () => void }) => unknown) | null = null;
+vi.mock("@tauri-apps/api/window", () => ({
+  getCurrentWindow: () => ({
+    close: closeMock,
+    destroy: destroyMock,
+    onCloseRequested: (handler: (event: { preventDefault: () => void }) => unknown) => {
+      closeRequested = handler;
+      return Promise.resolve(vi.fn());
+    },
+  }),
+}));
+
+const getConflictStagesMock = vi.mocked(getConflictStages);
+const writeResolvedMock = vi.mocked(writeResolved);
 const resolvePathMock = vi.mocked(resolvePath);
 const onRepoChangedMock = vi.mocked(onRepoChanged);
 
-/** A file with one conflict between two context lines. */
-function conflictFile(overrides: Partial<ConflictFile> = {}): ConflictFile {
+const RESULT = "context above\n<<<<<<< HEAD\nmine\n=======\ntheirs\n>>>>>>> feature\ncontext below\n";
+const RESOLVED = "context above\nmine\ncontext below\n";
+
+/** A conflicted file with one conflict between two unchanged runs. */
+function stages(overrides: Partial<ConflictStages> = {}): ConflictStages {
   return {
     path: "src/app.ts",
-    lines: [
-      "context above",
-      "<<<<<<< HEAD",
-      "ours line",
-      "=======",
-      "theirs line",
-      ">>>>>>> feature",
-      "context below",
-      "",
-    ],
-    blocks: [
+    base: ["context above", "base line", "context below", ""],
+    ours: ["context above", "mine", "context below", ""],
+    theirs: ["context above", "theirs", "context below", ""],
+    stages: [1, 2, 3],
+    chunks: [
       {
-        start: 1,
-        end: 6,
-        ours: { start: 2, end: 3 },
-        base: null,
-        theirs: { start: 4, end: 5 },
-        oursLabel: "HEAD",
-        theirsLabel: "feature",
-        complete: true,
+        kind: "unchanged",
+        base: { start: 0, end: 1 },
+        ours: { start: 0, end: 1 },
+        theirs: { start: 0, end: 1 },
+        result: { start: 0, end: 1 },
+      },
+      {
+        kind: "conflict",
+        base: { start: 1, end: 2 },
+        ours: { start: 1, end: 2 },
+        theirs: { start: 1, end: 2 },
+        result: { start: 1, end: 6 },
+      },
+      {
+        kind: "unchanged",
+        base: { start: 2, end: 4 },
+        ours: { start: 2, end: 4 },
+        theirs: { start: 2, end: 4 },
+        result: { start: 6, end: 8 },
       },
     ],
+    result: RESULT,
+    disk: RESULT,
+    oursLabel: "HEAD",
+    theirsLabel: "feature",
     revision: "rev-1",
+    diverged: false,
     binary: false,
     ...overrides,
   };
@@ -64,13 +111,20 @@ function setSearch(search: string) {
   window.history.replaceState({}, "", `/merge.html${search}`);
 }
 
+/** Type into the stubbed result pane. */
+function editBuffer(text: string) {
+  fireEvent.change(screen.getByLabelText("result buffer"), { target: { value: text } });
+}
+
 beforeEach(() => {
   setSearch("?repo=%2Frepo&path=src%2Fapp.ts");
-  getConflictFileMock.mockResolvedValue(conflictFile());
-  resolveConflictMock.mockResolvedValue({ remaining: 0, staged: true });
+  getConflictStagesMock.mockResolvedValue(stages());
+  writeResolvedMock.mockResolvedValue({ remaining: 0, staged: true });
   resolvePathMock.mockResolvedValue(undefined);
   onRepoChangedMock.mockResolvedValue(vi.fn());
   closeMock.mockClear();
+  destroyMock.mockClear();
+  closeRequested = null;
 });
 
 afterEach(() => {
@@ -80,255 +134,393 @@ afterEach(() => {
 describe("MergeWindow", () => {
   it("reads the file named in its own query string", async () => {
     render(<MergeWindow />);
-    await waitFor(() => expect(getConflictFileMock).toHaveBeenCalledWith("/repo", "src/app.ts"));
+    await waitFor(() => expect(getConflictStagesMock).toHaveBeenCalledWith("/repo", "src/app.ts"));
+    expect(screen.getByText("src/app.ts")).toBeInTheDocument();
   });
 
-  it("renders the conflict with both sides and the file's own line numbers", async () => {
+  it("opens the rebuilt merge and counts what is left to decide", async () => {
     render(<MergeWindow />);
-
-    expect(await screen.findByText("ours line")).toBeInTheDocument();
-    expect(screen.getByText("theirs line")).toBeInTheDocument();
-    expect(screen.getByText("context above")).toBeInTheDocument();
-    expect(screen.getByText("context below")).toBeInTheDocument();
-    // git's labels, shown verbatim, with which side they are spelled out.
-    expect(screen.getByText("HEAD (ours)")).toBeInTheDocument();
-    expect(screen.getByText("feature (theirs)")).toBeInTheDocument();
-    // "ours line" is index 2, so it displays as line 3.
-    expect(screen.getByText("3")).toBeInTheDocument();
+    await waitFor(() => expect(screen.getByTestId("panes")).toBeInTheDocument());
+    expect(screen.getByLabelText("result buffer")).toHaveValue(RESULT);
+    expect(screen.getByText("1 conflict to decide")).toBeInTheDocument();
   });
 
-  it("counts the conflicts in the header", async () => {
-    render(<MergeWindow />);
-    expect(await screen.findByText("1 conflict")).toBeInTheDocument();
-  });
-
-  it("sends the choice with the revision it was made against", async () => {
-    render(<MergeWindow />);
-    fireEvent.click(await screen.findByRole("button", { name: "Accept ours" }));
-
-    await waitFor(() =>
-      expect(resolveConflictMock).toHaveBeenCalledWith("/repo", "src/app.ts", 0, "ours", "rev-1"),
-    );
-  });
-
-  it("offers ours, theirs and both", async () => {
-    render(<MergeWindow />);
-    expect(await screen.findByRole("button", { name: "Accept ours" })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Accept theirs" })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Accept both" })).toBeInTheDocument();
-  });
-
-  it("says so when the last conflict was resolved and the file staged", async () => {
-    render(<MergeWindow />);
-    fireEvent.click(await screen.findByRole("button", { name: "Accept theirs" }));
-    expect(await screen.findByText(/resolved, and the file is staged/i)).toBeInTheDocument();
-  });
-
-  it("reports how many conflicts are left when others remain", async () => {
-    resolveConflictMock.mockResolvedValue({ remaining: 2, staged: false });
-    render(<MergeWindow />);
-    fireEvent.click(await screen.findByRole("button", { name: "Accept ours" }));
-    expect(await screen.findByText(/2 conflicts left in this file/i)).toBeInTheDocument();
-  });
-
-  it("shows the stale-revision refusal and reloads", async () => {
-    // The guard that stops a resolution landing on the wrong hunk. The window's
-    // answer is to say so and re-read what is actually on disk.
-    resolveConflictMock.mockRejectedValue(
-      new Error("'src/app.ts' changed on disk since it was read; reload it and try again"),
-    );
-    render(<MergeWindow />);
-    await screen.findByText("ours line");
-    getConflictFileMock.mockClear();
-
-    fireEvent.click(screen.getByRole("button", { name: "Accept ours" }));
-
-    expect(await screen.findByRole("alert")).toHaveTextContent(/changed on disk/i);
-    await waitFor(() => expect(getConflictFileMock).toHaveBeenCalled());
-  });
-
-  it("re-reads the file when the repo changes underneath it", async () => {
-    let fire: (() => void) | undefined;
-    onRepoChangedMock.mockImplementation((callback: () => void) => {
-      fire = callback;
-      return Promise.resolve(vi.fn());
-    });
-    render(<MergeWindow />);
-    await screen.findByText("ours line");
-    getConflictFileMock.mockClear();
-
-    fire?.();
-
-    await waitFor(() => expect(getConflictFileMock).toHaveBeenCalled());
-  });
-
-  it("renders the diff3 base section and says Accept both drops it", async () => {
-    getConflictFileMock.mockResolvedValue(
-      conflictFile({
-        lines: [
-          "<<<<<<< HEAD",
-          "ours line",
-          "||||||| merged common ancestors",
-          "base line",
-          "=======",
-          "theirs line",
-          ">>>>>>> feature",
-          "",
-        ],
-        blocks: [
-          {
-            start: 0,
-            end: 7,
-            ours: { start: 1, end: 2 },
-            base: { start: 3, end: 4 },
-            theirs: { start: 5, end: 6 },
-            oursLabel: "HEAD",
-            theirsLabel: "feature",
-            complete: true,
-          },
-        ],
-      }),
-    );
-    render(<MergeWindow />);
-
-    expect(await screen.findByText("base line")).toBeInTheDocument();
-    expect(screen.getByText(/dropped by Accept both/i)).toBeInTheDocument();
-  });
-
-  it("shows an empty side as a real choice rather than an absent block", async () => {
-    getConflictFileMock.mockResolvedValue(
-      conflictFile({
-        lines: ["<<<<<<< HEAD", "=======", "theirs line", ">>>>>>> feature", ""],
-        blocks: [
-          {
-            start: 0,
-            end: 4,
-            ours: { start: 1, end: 1 },
-            base: null,
-            theirs: { start: 2, end: 3 },
-            oursLabel: "HEAD",
-            theirsLabel: "feature",
-            complete: true,
-          },
-        ],
-      }),
-    );
-    render(<MergeWindow />);
-    expect(await screen.findByText(/nothing on this side/i)).toBeInTheDocument();
-  });
-
-  it("offers whole-file sides for a binary conflict and no hunks", async () => {
-    getConflictFileMock.mockResolvedValue(
-      conflictFile({ lines: [], blocks: [], binary: true }),
-    );
-    render(<MergeWindow />);
-
-    expect(await screen.findByText(/this file is binary/i)).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Keep mine" })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Keep theirs" })).toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: "Accept ours" })).not.toBeInTheDocument();
-  });
-
-  it("resolves a binary conflict as a whole path", async () => {
-    getConflictFileMock.mockResolvedValue(conflictFile({ lines: [], blocks: [], binary: true }));
-    render(<MergeWindow />);
-
-    fireEvent.click(await screen.findByRole("button", { name: "Keep theirs" }));
-
-    await waitFor(() =>
-      expect(resolvePathMock).toHaveBeenCalledWith("/repo", "src/app.ts", "keepTheirs"),
-    );
-  });
-
-  it("stays open and says the markers are gone when nothing is left", async () => {
-    // Never self-closing: a window vanishing on its own reads as a crash, and
-    // after an abort this is how the user finds out the markers went away.
-    getConflictFileMock.mockResolvedValue(conflictFile({ lines: ["a", ""], blocks: [] }));
-    render(<MergeWindow />);
-
-    expect(await screen.findByText(/no conflict markers left/i)).toBeInTheDocument();
-    expect(closeMock).not.toHaveBeenCalled();
-  });
-
-  it("offers Mark resolved for a file whose markers were removed by hand", async () => {
-    // The dead end this closes: git reports a path as unmerged until something
-    // stages it, so a conflict fixed in the diff window or the terminal would
-    // otherwise sit in the Conflicts group forever with Continue disabled.
-    getConflictFileMock.mockResolvedValue(
-      conflictFile({ lines: ["resolved by hand", ""], blocks: [] }),
-    );
-    render(<MergeWindow />);
-
-    fireEvent.click(await screen.findByRole("button", { name: "Mark resolved" }));
-
-    await waitFor(() =>
-      expect(resolvePathMock).toHaveBeenCalledWith("/repo", "src/app.ts", "markResolved"),
-    );
-  });
-
-  it("withholds the accept buttons on a half-edited conflict", async () => {
-    getConflictFileMock.mockResolvedValue(
-      conflictFile({
-        lines: ["top", "<<<<<<< HEAD", "ours", ">>>>>>> feature", "bottom", ""],
-        blocks: [
-          {
-            start: 1,
-            end: 4,
-            ours: { start: 2, end: 3 },
-            base: null,
-            theirs: { start: 3, end: 3 },
-            oursLabel: "HEAD",
-            theirsLabel: "",
-            complete: false,
-          },
-        ],
-      }),
-    );
-    render(<MergeWindow />);
-
-    expect(await screen.findByText(/fix it by hand/i)).toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: "Accept ours" })).not.toBeInTheDocument();
-  });
-
-  it("reports a read failure instead of an empty pane", async () => {
-    getConflictFileMock.mockRejectedValue(new Error("'src/app.ts' is no longer in the working tree"));
-    render(<MergeWindow />);
-    expect(await screen.findByRole("alert")).toHaveTextContent(/no longer in the working tree/i);
-  });
-
-  it("explains itself when opened without a target, and asks git for nothing", async () => {
+  it("renders the message rather than an empty pane when opened by hand", async () => {
     setSearch("");
     render(<MergeWindow />);
-    expect(await screen.findByRole("alert")).toHaveTextContent(
-      /without a repository and file path/i,
-    );
-    expect(getConflictFileMock).not.toHaveBeenCalled();
+    expect(await screen.findByRole("alert")).toHaveTextContent(/without a repository/);
+    expect(getConflictStagesMock).not.toHaveBeenCalled();
   });
 
-  it("closes on Escape and on Ctrl+W", async () => {
+  it("surfaces a failed read", async () => {
+    getConflictStagesMock.mockRejectedValue(new Error("'x' resolves outside the repository"));
     render(<MergeWindow />);
-    await screen.findByText("ours line");
-
-    fireEvent.keyDown(window, { key: "Escape" });
-    expect(closeMock).toHaveBeenCalledTimes(1);
-
-    fireEvent.keyDown(window, { key: "w", ctrlKey: true });
-    expect(closeMock).toHaveBeenCalledTimes(2);
+    expect(await screen.findByRole("alert")).toHaveTextContent(/outside the repository/);
   });
 
-  it("leaves a key another handler already dealt with alone", async () => {
-    render(<MergeWindow />);
-    await screen.findByText("ours line");
-    fireEvent(
-      window,
-      Object.assign(new KeyboardEvent("keydown", { key: "Escape", cancelable: true }), {}),
-    );
-    closeMock.mockClear();
+  describe("the single write", () => {
+    it("writes and stages the moment the last conflict goes", async () => {
+      render(<MergeWindow />);
+      await waitFor(() => expect(screen.getByTestId("panes")).toBeInTheDocument());
 
-    const handled = new KeyboardEvent("keydown", { key: "Escape", cancelable: true });
-    handled.preventDefault();
-    fireEvent(window, handled);
+      editBuffer(RESOLVED);
 
-    expect(closeMock).not.toHaveBeenCalled();
+      await waitFor(() =>
+        expect(writeResolvedMock).toHaveBeenCalledWith("/repo", "src/app.ts", RESOLVED, "rev-1"),
+      );
+      expect(await screen.findByText(/resolved, and the file is staged/i)).toBeInTheDocument();
+    });
+
+    it("writes nothing while a conflict is still undecided", async () => {
+      render(<MergeWindow />);
+      await waitFor(() => expect(screen.getByTestId("panes")).toBeInTheDocument());
+
+      // An edit that leaves the markers alone: still work outstanding.
+      editBuffer(RESULT.replace("mine", "mine, edited"));
+
+      await Promise.resolve();
+      expect(writeResolvedMock).not.toHaveBeenCalled();
+      expect(screen.getByText("1 conflict to decide")).toBeInTheDocument();
+    });
+
+    it("does not write again when its own write comes back through the watcher", async () => {
+      // The write triggers repo://changed, which reloads; without the guard that
+      // reload would write the same text over and over.
+      let fire: () => void = () => undefined;
+      onRepoChangedMock.mockImplementation((handler: () => void) => {
+        fire = handler;
+        return Promise.resolve(vi.fn());
+      });
+      render(<MergeWindow />);
+      await waitFor(() => expect(screen.getByTestId("panes")).toBeInTheDocument());
+
+      editBuffer(RESOLVED);
+      await waitFor(() => expect(writeResolvedMock).toHaveBeenCalledTimes(1));
+
+      getConflictStagesMock.mockResolvedValue(stages({ stages: [], disk: RESOLVED }));
+      fire();
+      await waitFor(() => expect(screen.getByText(/no longer reports this file/i)).toBeVisible());
+      expect(writeResolvedMock).toHaveBeenCalledTimes(1);
+    });
+
+    it("surfaces a refused write and keeps the buffer", async () => {
+      // The backend re-counts the markers and re-checks the revision; a refusal is
+      // information, not something to paper over.
+      writeResolvedMock.mockRejectedValue(
+        new Error("'src/app.ts' changed on disk since it was read; reload it and try again"),
+      );
+      render(<MergeWindow />);
+      await waitFor(() => expect(screen.getByTestId("panes")).toBeInTheDocument());
+
+      editBuffer(RESOLVED);
+
+      expect(await screen.findByRole("alert")).toHaveTextContent(/changed on disk/);
+      expect(screen.getByLabelText("result buffer")).toHaveValue(RESOLVED);
+    });
+
+    it("does not retry a refused write over and over", async () => {
+      // The effect fires again when `busy` clears, and every guard still passes, so
+      // without remembering the refusal this loops forever — holding the op lock
+      // each time and starving the main window's git operations.
+      writeResolvedMock.mockRejectedValue(new Error("'src/app.ts' changed on disk"));
+      render(<MergeWindow />);
+      await waitFor(() => expect(screen.getByTestId("panes")).toBeInTheDocument());
+
+      editBuffer(RESOLVED);
+      await waitFor(() => expect(writeResolvedMock).toHaveBeenCalledTimes(1));
+
+      // Let several effect turns go by; the count must not budge.
+      for (let turn = 0; turn < 5; turn += 1) await Promise.resolve();
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      expect(writeResolvedMock).toHaveBeenCalledTimes(1);
+    });
+
+    it("keeps a refusal on screen when an unrelated watcher event arrives", async () => {
+      // A read succeeding says nothing about the write that was refused, and the
+      // user still has to act on it.
+      let fire: () => void = () => undefined;
+      onRepoChangedMock.mockImplementation((handler: () => void) => {
+        fire = handler;
+        return Promise.resolve(vi.fn());
+      });
+      writeResolvedMock.mockRejectedValue(new Error("'src/app.ts' changed on disk"));
+      render(<MergeWindow />);
+      await waitFor(() => expect(screen.getByTestId("panes")).toBeInTheDocument());
+      editBuffer(RESOLVED);
+      expect(await screen.findByRole("alert")).toHaveTextContent(/changed on disk/);
+
+      fire();
+      await new Promise((resolve) => setTimeout(resolve, 0));
+
+      expect(screen.getByRole("alert")).toHaveTextContent(/changed on disk/);
+    });
+
+    it("tries again once the buffer changes after a refusal", async () => {
+      // A refusal must not be a dead end either: editing on is a new attempt.
+      writeResolvedMock.mockRejectedValueOnce(new Error("'src/app.ts' changed on disk"));
+      render(<MergeWindow />);
+      await waitFor(() => expect(screen.getByTestId("panes")).toBeInTheDocument());
+
+      editBuffer(RESOLVED);
+      await waitFor(() => expect(writeResolvedMock).toHaveBeenCalledTimes(1));
+
+      editBuffer(RESOLVED.replace("mine", "mine, again"));
+      await waitFor(() => expect(writeResolvedMock).toHaveBeenCalledTimes(2));
+    });
+  });
+
+  describe("a file that changed since git wrote it", () => {
+    it("asks which version to work from instead of guessing", async () => {
+      getConflictStagesMock.mockResolvedValue(
+        stages({ diverged: true, disk: "context above\nhand edited\ncontext below\n" }),
+      );
+      render(<MergeWindow />);
+
+      expect(await screen.findByText(/changed since git wrote it/i)).toBeInTheDocument();
+      // No editor yet: opening either text would be a guess, and one of them loses
+      // work done outside the app.
+      expect(screen.queryByTestId("panes")).not.toBeInTheDocument();
+    });
+
+    it("opens the file on disk when asked, keeping the edit", async () => {
+      const disk = "context above\nhand edited\ncontext below\n";
+      getConflictStagesMock.mockResolvedValue(stages({ diverged: true, disk }));
+      render(<MergeWindow />);
+      fireEvent.click(await screen.findByRole("button", { name: /use the file on disk/i }));
+
+      expect(screen.getByLabelText("result buffer")).toHaveValue(disk);
+      expect(screen.getByText(/opened from the file on disk/i)).toBeInTheDocument();
+    });
+
+    it("opens the rebuild when asked to start over", async () => {
+      getConflictStagesMock.mockResolvedValue(
+        stages({ diverged: true, disk: "context above\nhand edited\ncontext below\n" }),
+      );
+      render(<MergeWindow />);
+      fireEvent.click(await screen.findByRole("button", { name: /start over/i }));
+
+      expect(screen.getByLabelText("result buffer")).toHaveValue(RESULT);
+    });
+
+    it("still writes a disk version that has no conflicts left", async () => {
+      // "Use the file on disk" on an already-resolved file: nothing is staged yet,
+      // so reaching zero conflicts still has to write.
+      getConflictStagesMock.mockResolvedValue(
+        stages({ diverged: true, disk: RESOLVED }),
+      );
+      render(<MergeWindow />);
+      fireEvent.click(await screen.findByRole("button", { name: /use the file on disk/i }));
+
+      await waitFor(() =>
+        expect(writeResolvedMock).toHaveBeenCalledWith("/repo", "src/app.ts", RESOLVED, "rev-1"),
+      );
+    });
+  });
+
+  describe("following the file", () => {
+    it("adopts a reload while the buffer is untouched", async () => {
+      let fire: () => void = () => undefined;
+      onRepoChangedMock.mockImplementation((handler: () => void) => {
+        fire = handler;
+        return Promise.resolve(vi.fn());
+      });
+      render(<MergeWindow />);
+      await waitFor(() => expect(screen.getByTestId("panes")).toBeInTheDocument());
+
+      const moved = RESULT.replace("theirs", "their newer line");
+      getConflictStagesMock.mockResolvedValue(
+        stages({ result: moved, disk: moved, revision: "rev-2" }),
+      );
+      fire();
+
+      await waitFor(() => expect(screen.getByLabelText("result buffer")).toHaveValue(moved));
+      expect(screen.queryByText(/changed on disk while you were working/i)).not.toBeInTheDocument();
+    });
+
+    it("says nothing when the event was about some other file", async () => {
+      // `repo://changed` fires for anything in the repository, and with Claude Code
+      // writing files in the terminal next door that is the common case. Warning
+      // about a file nobody touched — and offering to discard the buffer — would be
+      // a lie the user has to evaluate every few seconds.
+      let fire: () => void = () => undefined;
+      onRepoChangedMock.mockImplementation((handler: () => void) => {
+        fire = handler;
+        return Promise.resolve(vi.fn());
+      });
+      render(<MergeWindow />);
+      await waitFor(() => expect(screen.getByTestId("panes")).toBeInTheDocument());
+
+      const mine = RESULT.replace("mine", "my work in progress");
+      editBuffer(mine);
+      // Same revision and the same stages: this file did not move.
+      fire();
+      await new Promise((resolve) => setTimeout(resolve, 0));
+
+      expect(screen.queryByText(/changed on disk while you were working/i)).not.toBeInTheDocument();
+      expect(screen.getByLabelText("result buffer")).toHaveValue(mine);
+    });
+
+    it("keeps a touched buffer and says the file moved instead", async () => {
+      // The whole reason the diff window's adopt guard has an analogue here: a
+      // watcher event fires for anything in the repository, and silently replacing
+      // a half-finished resolution is unforgivable.
+      let fire: () => void = () => undefined;
+      onRepoChangedMock.mockImplementation((handler: () => void) => {
+        fire = handler;
+        return Promise.resolve(vi.fn());
+      });
+      render(<MergeWindow />);
+      await waitFor(() => expect(screen.getByTestId("panes")).toBeInTheDocument());
+
+      const mine = RESULT.replace("mine", "my work in progress");
+      editBuffer(mine);
+
+      getConflictStagesMock.mockResolvedValue(
+        stages({
+          result: RESULT.replace("theirs", "elsewhere"),
+          disk: "something else\n",
+          // A changed file means a changed revision: it is a hash of the bytes.
+          revision: "rev-2",
+        }),
+      );
+      fire();
+
+      await waitFor(() =>
+        expect(screen.getByText(/changed on disk while you were working/i)).toBeInTheDocument(),
+      );
+      expect(screen.getByLabelText("result buffer")).toHaveValue(mine);
+    });
+
+    it("reloads on request, discarding the buffer the user chose to drop", async () => {
+      let fire: () => void = () => undefined;
+      onRepoChangedMock.mockImplementation((handler: () => void) => {
+        fire = handler;
+        return Promise.resolve(vi.fn());
+      });
+      render(<MergeWindow />);
+      await waitFor(() => expect(screen.getByTestId("panes")).toBeInTheDocument());
+      editBuffer(RESULT.replace("mine", "my work in progress"));
+
+      const newer = RESULT.replace("theirs", "elsewhere");
+      getConflictStagesMock.mockResolvedValue(
+        stages({ result: newer, disk: newer, revision: "rev-2" }),
+      );
+      fire();
+      await waitFor(() =>
+        expect(screen.getByText(/changed on disk while you were working/i)).toBeInTheDocument(),
+      );
+
+      fireEvent.click(screen.getByRole("button", { name: /reload it/i }));
+      await waitFor(() => expect(screen.getByLabelText("result buffer")).toHaveValue(newer));
+    });
+  });
+
+  describe("closing", () => {
+    it("asks before dropping an undecided buffer", async () => {
+      // The buffer is not on disk anywhere until every conflict is decided, so it
+      // goes with the window.
+      const confirm = vi.spyOn(window, "confirm").mockReturnValue(false);
+      render(<MergeWindow />);
+      await waitFor(() => expect(screen.getByTestId("panes")).toBeInTheDocument());
+      editBuffer(RESULT.replace("mine", "half done"));
+
+      const preventDefault = vi.fn();
+      await closeRequested?.({ preventDefault });
+
+      expect(preventDefault).toHaveBeenCalled();
+      expect(confirm).toHaveBeenCalledWith(expect.stringMatching(/unresolved conflicts/i));
+      expect(destroyMock).not.toHaveBeenCalled();
+    });
+
+    it("closes once the loss is confirmed", async () => {
+      vi.spyOn(window, "confirm").mockReturnValue(true);
+      render(<MergeWindow />);
+      await waitFor(() => expect(screen.getByTestId("panes")).toBeInTheDocument());
+      editBuffer(RESULT.replace("mine", "half done"));
+
+      await closeRequested?.({ preventDefault: vi.fn() });
+
+      expect(destroyMock).toHaveBeenCalled();
+    });
+
+    it("does not ask when nothing has been touched", async () => {
+      const confirm = vi.spyOn(window, "confirm");
+      render(<MergeWindow />);
+      await waitFor(() => expect(screen.getByTestId("panes")).toBeInTheDocument());
+
+      const preventDefault = vi.fn();
+      await closeRequested?.({ preventDefault });
+
+      expect(preventDefault).not.toHaveBeenCalled();
+      expect(confirm).not.toHaveBeenCalled();
+    });
+
+    it("does not ask once the file has been resolved and written", async () => {
+      const confirm = vi.spyOn(window, "confirm");
+      render(<MergeWindow />);
+      await waitFor(() => expect(screen.getByTestId("panes")).toBeInTheDocument());
+      editBuffer(RESOLVED);
+      await waitFor(() => expect(writeResolvedMock).toHaveBeenCalled());
+
+      await closeRequested?.({ preventDefault: vi.fn() });
+
+      expect(confirm).not.toHaveBeenCalled();
+    });
+
+    it("closes on Escape and on Ctrl+W", async () => {
+      render(<MergeWindow />);
+      await waitFor(() => expect(screen.getByTestId("panes")).toBeInTheDocument());
+
+      fireEvent.keyDown(window, { key: "Escape" });
+      expect(closeMock).toHaveBeenCalledTimes(1);
+
+      fireEvent.keyDown(window, { key: "w", ctrlKey: true });
+      expect(closeMock).toHaveBeenCalledTimes(2);
+    });
+  });
+
+  describe("the conflicts with no text to merge", () => {
+    it("offers a whole-side choice for a binary file", async () => {
+      getConflictStagesMock.mockResolvedValue(
+        stages({ binary: true, chunks: [], result: "", ours: [], theirs: [] }),
+      );
+      render(<MergeWindow />);
+
+      expect(await screen.findByText(/nothing to merge line by line/i)).toBeInTheDocument();
+      expect(screen.queryByTestId("panes")).not.toBeInTheDocument();
+
+      fireEvent.click(screen.getByRole("button", { name: /keep mine/i }));
+      await waitFor(() =>
+        expect(resolvePathMock).toHaveBeenCalledWith("/repo", "src/app.ts", "keepOurs"),
+      );
+    });
+
+    it("points at the panel for a one-sided conflict", async () => {
+      // Only stage 2: there is no second version to put in a pane, and the
+      // whole-file buttons live on the row in the Status panel.
+      getConflictStagesMock.mockResolvedValue(
+        stages({ stages: [1, 2], chunks: [], result: "", theirs: [] }),
+      );
+      render(<MergeWindow />);
+
+      expect(await screen.findByText(/only one side of this file/i)).toBeInTheDocument();
+      expect(screen.queryByTestId("panes")).not.toBeInTheDocument();
+    });
+
+    it("says so, and still offers Mark resolved, once git stops reporting it", async () => {
+      // Reachable by an abort, by resolving elsewhere, or by a hand fix the user
+      // has not staged — which is what keeps the button worth having.
+      getConflictStagesMock.mockResolvedValue(stages({ stages: [], chunks: [], result: "" }));
+      render(<MergeWindow />);
+
+      expect(await screen.findByText(/no longer reports this file as conflicted/i)).toBeVisible();
+      // Never closes itself: an OS window vanishing reads as a crash.
+      expect(closeMock).not.toHaveBeenCalled();
+
+      fireEvent.click(screen.getByRole("button", { name: /mark resolved/i }));
+      await waitFor(() =>
+        expect(resolvePathMock).toHaveBeenCalledWith("/repo", "src/app.ts", "markResolved"),
+      );
+    });
   });
 });

@@ -1,9 +1,11 @@
-/* Merge window chrome. Deliberately thin, like diff.css: a header row over a
-   scrolling read-only view of the conflicted file. Palette matches App.css so
-   all three windows read as one app.
+/* Merge window chrome. Deliberately thin, like diff.css: a header row and a
+   notice strip over the three-pane editor. Palette matches App.css so all three
+   windows read as one app.
 
-   Part 7 replaces the body of this window with a 3-pane CodeMirror editor; the
-   header, the notices and the shell below are what it will keep. */
+   The panes themselves are styled from codemirrorSetup's theme, not from here:
+   CodeMirror scopes its own class names and injects them at runtime, and a
+   stylesheet racing that would be a fight over specificity. What lives here is
+   the grid the three panes sit in and the chrome around them. */
 
 html,
 body,
@@ -63,77 +65,130 @@ body {
   color: #f14c4c;
 }
 
+/* A declined reload: not an error, but the user has to know their buffer is not
+   what is on disk any more. */
+.merge-notice--warn {
+  color: #e08f4c;
+}
+
+.merge-inline-button {
+  padding: 0;
+  border: none;
+  background: none;
+  color: #6cb6ff;
+  font: inherit;
+  text-decoration: underline;
+  cursor: pointer;
+}
+
+.merge-header-source {
+  flex: 0 0 auto;
+  color: #8a8a8a;
+}
+
+/* `overflow: hidden`, not auto: the three panes scroll themselves, and an outer
+   scrollbar would move all of them at once and defeat the sync. */
 .merge-body {
   flex: 1 1 auto;
+  display: flex;
+  flex-direction: column;
   min-height: 0;
-  overflow: auto;
+  overflow: hidden;
+}
+
+.merge-panes {
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
+.merge-toolbar {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 5px 12px;
+  background: #252526;
+  border-bottom: 1px solid #333;
+  user-select: none;
+}
+
+.merge-toolbar-group {
+  display: flex;
+  gap: 6px;
+}
+
+/* Between the two groups, so the current chunk's description takes the slack and
+   the action buttons stay pinned right. */
+.merge-toolbar-current {
+  flex: 1 1 auto;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: #b9b9b9;
+}
+
+/* Three equal columns. `minmax(0, 1fr)` rather than `1fr`: a long unwrapped line
+   in one pane would otherwise widen its column and squeeze the other two. */
+.merge-grid {
+  flex: 1 1 auto;
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 1px;
+  min-height: 0;
+  background: #333;
+}
+
+.merge-pane {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  background: #1e1e1e;
+}
+
+.merge-pane-header {
+  flex: 0 0 auto;
+  padding: 3px 10px;
+  background: #252526;
+  border-bottom: 1px solid #333;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  user-select: none;
+}
+
+/* Ours green, theirs blue, the result neutral: the same split the diff window
+   uses, and the same one the chunk tints follow. */
+.merge-pane-header--ours {
+  color: #89d185;
+}
+
+.merge-pane-header--theirs {
+  color: #6cb6ff;
+}
+
+.merge-pane-header--result {
+  color: #d4d4d4;
+}
+
+.merge-pane-editor {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: hidden;
 }
 
 .merge-whole-file {
   padding: 8px 0;
 }
 
-/* The file itself is monospace and never wraps: a wrapped line would break the
-   correspondence between what is on screen and what is in the file. */
-.merge-file {
-  padding: 4px 0 24px;
-  font: 12px/1.5 "JetBrains Mono", ui-monospace, monospace;
-  white-space: pre;
-}
-
-.merge-line {
-  display: flex;
-  gap: 12px;
-  padding: 0 12px;
-}
-
-.merge-line-number {
-  flex: 0 0 auto;
-  width: 42px;
-  text-align: right;
-  color: #6a6a6a;
-  user-select: none;
-}
-
-.merge-line-text {
-  white-space: pre;
-}
-
-/* One block per conflict, indented from the surrounding context so the extent of
-   the conflict is obvious at a glance. */
-.merge-block {
-  margin: 6px 0;
-  border: 1px solid #6b4a1f;
-  border-radius: 3px;
-  background: #221d16;
-}
-
-.merge-block-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  padding: 4px 10px;
-  background: #2b2318;
-  border-bottom: 1px solid #6b4a1f;
-  font-family: system-ui, sans-serif;
-}
-
-.merge-block-count {
-  color: #e08f4c;
-}
-
-/* A half-edited block: no accept buttons, and why. */
-.merge-block-broken {
-  color: #f14c4c;
-  font: 11px/1.6 system-ui, sans-serif;
-  padding: 0 10px;
-}
-
+/* A row of choices: the toolbar's chunk actions, the divergence banner's two
+   options, and the whole-file buttons for a binary conflict. */
 .merge-block-actions {
   display: flex;
   gap: 6px;
-  padding: 0 10px;
+  padding: 0 12px;
 }
 
 .merge-choice {
@@ -143,6 +198,7 @@ body {
   background: #333;
   color: #cccccc;
   font: 12px/1.5 system-ui, sans-serif;
+  white-space: nowrap;
   cursor: pointer;
 }
 
@@ -155,44 +211,3 @@ body {
   cursor: default;
 }
 
-.merge-section {
-  padding: 4px 0;
-}
-
-.merge-section-label {
-  margin: 0;
-  padding: 0 12px;
-  color: #8a8a8a;
-  font: 11px/1.6 system-ui, sans-serif;
-}
-
-.merge-section-empty {
-  margin: 0;
-  padding: 0 12px 0 66px;
-  color: #6a6a6a;
-  font: 11px/1.6 system-ui, sans-serif;
-}
-
-/* Ours green, theirs blue, base dimmed: the same green/blue split the diff
-   window uses for added and renamed, so the two windows agree on what a side
-   looks like. */
-.merge-line--ours {
-  background: rgba(137, 209, 133, 0.08);
-}
-
-.merge-line--theirs {
-  background: rgba(108, 182, 255, 0.08);
-}
-
-.merge-line--base {
-  background: rgba(255, 255, 255, 0.03);
-  color: #8a8a8a;
-}
-
-.merge-section--ours .merge-section-label {
-  color: #89d185;
-}
-
-.merge-section--theirs .merge-section-label {
-  color: #6cb6ff;
-}

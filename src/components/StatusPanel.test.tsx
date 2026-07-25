@@ -6,6 +6,7 @@ import { initialLayoutState, useLayoutStore } from "../store/layoutStore";
 import { openDiffWindow } from "../lib/diffWindow";
 import { openMergeWindow } from "../lib/mergeWindow";
 import type { ConflictKind } from "../lib/gitStatus";
+import { mergeState } from "../test/factories";
 
 vi.mock("../lib/diffWindow", () => ({ openDiffWindow: vi.fn() }));
 vi.mock("../lib/mergeWindow", () => ({ openMergeWindow: vi.fn() }));
@@ -159,7 +160,7 @@ describe("StatusPanel conflicts (Part 6)", () => {
       phase: "ready",
       repoRoot: "/repo",
       conflicts: [{ path, kind }],
-      mergeState: { kind: "merge", mergingRef: "feature" },
+      mergeState: mergeState("merge", { mergingRef: "feature" }),
     });
     render(<StatusPanel />);
   }
