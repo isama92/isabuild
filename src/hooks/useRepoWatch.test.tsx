@@ -50,7 +50,7 @@ beforeEach(() => {
   useGitStore.setState(initialGitState);
   unlisten = vi.fn();
   repoChangedCb = undefined;
-  getStatusMock.mockResolvedValue({ repoRoot: "/repo", staged: [], unstaged: [] });
+  getStatusMock.mockResolvedValue({ repoRoot: "/repo", staged: [], unstaged: [], conflicts: [] });
   getBranchStateMock.mockResolvedValue(BRANCH_STATE);
   startWatchMock.mockResolvedValue(undefined);
   onRepoChangedMock.mockImplementation((cb: () => void) => {
@@ -159,7 +159,7 @@ describe("useRepoWatch", () => {
 
     const { unmount } = render(<Harness />);
     unmount();
-    resolveStatus({ repoRoot: "/repo", staged: [], unstaged: [] });
+    resolveStatus({ repoRoot: "/repo", staged: [], unstaged: [], conflicts: [] });
     await flush();
 
     expect(startWatchMock).not.toHaveBeenCalled();

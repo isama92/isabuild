@@ -108,6 +108,37 @@ pub fn repo_with_bare_remote() -> tempfile::TempDir {
     dir
 }
 
+/// A repo on `main` with a `feature` branch that changed the *same line*, so
+/// `git merge feature` is guaranteed to conflict. Nothing is merged yet.
+///
+/// Three lines, not one, so a resolved file can be checked to still have its
+/// context: a resolution that quietly ate the surrounding lines would otherwise
+/// pass.
+pub fn repo_with_conflicting_branches() -> tempfile::TempDir {
+    let dir = repo_with_commit("file.txt", "one\ntwo\nthree\n");
+    git_in(dir.path(), &["switch", "--quiet", "-c", "feature"]);
+    write(dir.path(), "file.txt", "one\ntwo from feature\nthree\n");
+    commit_all(dir.path(), "feature edit");
+    git_in(dir.path(), &["switch", "--quiet", "main"]);
+    write(dir.path(), "file.txt", "one\ntwo from main\nthree\n");
+    commit_all(dir.path(), "main edit");
+    dir
+}
+
+/// A repo on `main` where `feature` deleted the file `main` went on editing.
+/// Merging `feature` gives a delete/modify conflict (`UD`) — no markers, no text
+/// to accept, which is the case a marker-only implementation cannot finish.
+pub fn repo_with_delete_modify_branches() -> tempfile::TempDir {
+    let dir = repo_with_commit("file.txt", "one\ntwo\n");
+    git_in(dir.path(), &["switch", "--quiet", "-c", "feature"]);
+    git_in(dir.path(), &["rm", "-q", "file.txt"]);
+    commit(dir.path(), "feature deletes the file");
+    git_in(dir.path(), &["switch", "--quiet", "main"]);
+    write(dir.path(), "file.txt", "one\ntwo edited\n");
+    commit_all(dir.path(), "main edits the file");
+    dir
+}
+
 /// Path of the bare remote inside a [`repo_with_bare_remote`] fixture.
 pub fn bare_remote_path(dir: &Path) -> std::path::PathBuf {
     dir.join("origin.git")

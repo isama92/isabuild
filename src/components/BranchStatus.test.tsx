@@ -53,6 +53,7 @@ function stubActions() {
     renameBranch: vi.fn().mockResolvedValue(true),
     runOp: vi.fn().mockResolvedValue(true),
     cancelOp: vi.fn().mockResolvedValue(undefined),
+    mergeBranch: vi.fn().mockResolvedValue(true),
   };
   useGitStore.setState(actions);
   return actions;
@@ -444,6 +445,71 @@ describe("BranchStatus notices and errors", () => {
     );
     expect(screen.getByRole("dialog", { name: "push failed" })).toBeInTheDocument();
     expect(screen.getByText("! [rejected] main -> main")).toBeInTheDocument();
+  });
+
+  it("counts a conflict as a pending change when switching away", () => {
+    // Conflicts became their own group in Part 6; leaving them out of the count
+    // made a conflicted repo look clean, so a switch skipped the prompt and went
+    // straight to git, which refuses it.
+    const { switchTo } = setup();
+    act(() =>
+      useGitStore.setState({ conflicts: [{ path: "a.ts", kind: "bothModified" }] }),
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Current branch" }));
+    fireEvent.click(screen.getByRole("button", { name: "Switch to dev" }));
+
+    expect(screen.getByRole("dialog", { name: /uncommitted changes/i })).toBeInTheDocument();
+    expect(screen.getByText(/1 change that is not committed/i)).toBeInTheDocument();
+    expect(switchTo).not.toHaveBeenCalled();
+  });
+
+  it("confirms a merge from the branch menu before running it", () => {
+    const { mergeBranch } = setup();
+    fireEvent.click(screen.getByRole("button", { name: "Current branch" }));
+    fireEvent.click(screen.getByRole("button", { name: "Actions for dev" }));
+    fireEvent.click(screen.getByRole("button", { name: "Merge into main…" }));
+
+    // The dialog spells out the direction, which is the part people get wrong.
+    expect(screen.getByRole("dialog", { name: "Merge dev into main?" })).toBeInTheDocument();
+    expect(mergeBranch).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByRole("button", { name: "Merge" }));
+    expect(mergeBranch).toHaveBeenCalledWith("dev");
+  });
+
+  it("does not merge when the confirm is cancelled", () => {
+    const { mergeBranch } = setup();
+    fireEvent.click(screen.getByRole("button", { name: "Current branch" }));
+    fireEvent.click(screen.getByRole("button", { name: "Actions for dev" }));
+    fireEvent.click(screen.getByRole("button", { name: "Merge into main…" }));
+    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+
+    expect(mergeBranch).not.toHaveBeenCalled();
+  });
+
+  it("blocks the merge entries while something else is in progress", () => {
+    // git would refuse anyway, but a disabled entry saying why beats a modal
+    // full of git's refusal.
+    setup();
+    act(() =>
+      useGitStore.setState({ mergeState: { kind: "merge", mergingRef: "feature" } }),
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Current branch" }));
+    fireEvent.click(screen.getByRole("button", { name: "Actions for dev" }));
+
+    const merge = screen.getByRole("button", { name: "Merge into main…" });
+    expect(merge).toBeDisabled();
+    expect(merge).toHaveAttribute("title", "Finish or abort the operation in progress first");
+  });
+
+  it("blocks the merge entries in a repo with no commits", () => {
+    setup({ unborn: true, locals: [{ name: "main", committerDate: 1, headShort: "" }] });
+    fireEvent.click(screen.getByRole("button", { name: "Current branch" }));
+    fireEvent.click(screen.getByRole("button", { name: "Actions for main" }));
+
+    // "You are on it" wins over the unborn reason for this row; either way it is
+    // disabled with a reason, which is the invariant that matters.
+    expect(screen.getByRole("button", { name: "Merge into main…" })).toBeDisabled();
   });
 
   it("queues the command in the bottom terminal and reveals it on retry", () => {

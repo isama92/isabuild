@@ -41,15 +41,26 @@ function state(overrides: Partial<BranchState> = {}): BranchState {
   };
 }
 
-function setup(overrides: Partial<BranchState> = {}, props: Partial<{ busy: boolean }> = {}) {
+function setup(
+  overrides: Partial<BranchState> = {},
+  props: Partial<{ busy: boolean; mergeBlocked: string | null }> = {},
+) {
   const handlers = {
     onPick: vi.fn(),
     onNewBranch: vi.fn(),
     onRename: vi.fn(),
     onDelete: vi.fn(),
+    onMerge: vi.fn(),
     onClose: vi.fn(),
   };
-  render(<BranchMenu state={state(overrides)} {...handlers} busy={props.busy ?? false} />);
+  render(
+    <BranchMenu
+      state={state(overrides)}
+      {...handlers}
+      busy={props.busy ?? false}
+      mergeBlocked={props.mergeBlocked ?? null}
+    />,
+  );
   return handlers;
 }
 
@@ -219,5 +230,62 @@ describe("BranchMenu", () => {
     setup({ locals: [], remotes: [] });
     expect(screen.getByText("No matching branches")).toBeInTheDocument();
     expect(screen.queryByRole("heading", { name: "Branches" })).not.toBeInTheDocument();
+  });
+});
+
+describe("BranchMenu merge action (Part 6)", () => {
+  it("offers a merge into the current branch on another local branch", () => {
+    const { onMerge } = setup();
+    fireEvent.click(screen.getByRole("button", { name: "Actions for feature/login" }));
+
+    const merge = screen.getByRole("button", { name: "Merge into main…" });
+    expect(merge).toBeEnabled();
+    fireEvent.click(merge);
+
+    expect(onMerge).toHaveBeenCalledWith("feature/login");
+  });
+
+  it("refuses to merge the branch you are already on, and says why", () => {
+    setup();
+    fireEvent.click(screen.getByRole("button", { name: "Actions for main" }));
+
+    const merge = screen.getByRole("button", { name: "Merge into main…" });
+    expect(merge).toBeDisabled();
+    expect(merge).toHaveAttribute("title", "This is the branch you are on");
+  });
+
+  it("merges a remote-tracking ref directly, with no local branch needed", () => {
+    const { onMerge } = setup();
+    fireEvent.click(screen.getByRole("button", { name: "Actions for origin/colleague" }));
+
+    fireEvent.click(screen.getByRole("button", { name: "Merge into main…" }));
+
+    expect(onMerge).toHaveBeenCalledWith("origin/colleague");
+  });
+
+  it("passes the blocked reason through as the disabled tooltip", () => {
+    // A greyed-out Merge that does not say why is worse than no Merge at all.
+    setup({}, { mergeBlocked: "Finish or abort the operation in progress first" });
+    fireEvent.click(screen.getByRole("button", { name: "Actions for feature/login" }));
+
+    const merge = screen.getByRole("button", { name: "Merge into main…" });
+    expect(merge).toBeDisabled();
+    expect(merge).toHaveAttribute("title", "Finish or abort the operation in progress first");
+  });
+
+  it("says merging needs a branch when HEAD is detached", () => {
+    setup({ current: null });
+    fireEvent.click(screen.getByRole("button", { name: "Actions for feature/login" }));
+
+    const merge = screen.getByRole("button", { name: "Merge…" });
+    expect(merge).toBeDisabled();
+    expect(merge).toHaveAttribute("title", "Merging needs a branch checked out");
+  });
+
+  it("is disabled while an operation is running", () => {
+    setup({}, { busy: true });
+    // The row's actions trigger is itself disabled, which is what keeps the menu
+    // (and its merge entry) out of reach mid-operation.
+    expect(screen.getByRole("button", { name: "Actions for feature/login" })).toBeDisabled();
   });
 });

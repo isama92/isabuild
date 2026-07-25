@@ -172,7 +172,13 @@ export function DirtySwitchDialog({
   onChoose,
   onClose,
 }: DirtySwitchDialogProps) {
-  const changes = `${changeCount} ${changeCount === 1 ? "change" : "changes"}`;
+  // Both halves of the sentence agree with the count. A single conflicted file is
+  // now a common way to reach this dialog (Part 6 counts conflicts as changes),
+  // which is what made "1 change that are not committed" worth fixing.
+  const sentence =
+    changeCount === 1
+      ? `You have 1 change that is not committed to ${from}. What should happen to it?`
+      : `You have ${changeCount} changes that are not committed to ${from}. What should happen to them?`;
   return (
     <Modal
       title="You have uncommitted changes"
@@ -195,9 +201,7 @@ export function DirtySwitchDialog({
         </>
       }
     >
-      <p className="modal-text">
-        {`You have ${changes} that are not committed to ${from}. What should happen to them?`}
-      </p>
+      <p className="modal-text">{sentence}</p>
       <p className="modal-hint">
         {`Leaving them stashes them for ${from}; they come back automatically the next time you switch to it.`}
       </p>
@@ -332,6 +336,78 @@ export function DeleteBranchDialog({
           {`${name} will be deleted. Its commits stay reachable if they are merged somewhere else.`}
         </p>
       )}
+    </Modal>
+  );
+}
+
+// --- Merge ------------------------------------------------------------------
+
+interface MergeBranchDialogProps {
+  /** The ref being merged in. */
+  from: string;
+  /** The branch it lands on. */
+  into: string;
+  onMerge: () => void;
+  onClose: () => void;
+}
+
+export function MergeBranchDialog({ from, into, onMerge, onClose }: MergeBranchDialogProps) {
+  return (
+    <Modal
+      title={`Merge ${from} into ${into}?`}
+      onClose={onClose}
+      actions={
+        <>
+          <button type="button" className="modal-button" onClick={onClose}>
+            Cancel
+          </button>
+          <button type="button" className="modal-button modal-button--primary" onClick={onMerge}>
+            Merge
+          </button>
+        </>
+      }
+    >
+      <p className="modal-text">
+        {`Commits from ${from} will be merged into ${into}, which stays the branch you are on.`}
+      </p>
+      <p className="modal-hint">
+        If the two have changed the same lines, the merge stops and the conflicts appear in the
+        Status panel to resolve.
+      </p>
+    </Modal>
+  );
+}
+
+interface AbortMergeDialogProps {
+  /** What is being merged in, for the sentence. */
+  mergingRef: string | null;
+  onAbort: () => void;
+  onClose: () => void;
+}
+
+export function AbortMergeDialog({ mergingRef, onAbort, onClose }: AbortMergeDialogProps) {
+  const subject = mergingRef === null ? "this merge" : `the merge of ${mergingRef}`;
+  return (
+    <Modal
+      title="Abort the merge?"
+      onClose={onClose}
+      actions={
+        <>
+          <button type="button" className="modal-button" onClick={onClose}>
+            Keep merging
+          </button>
+          <button type="button" className="modal-button modal-button--danger" onClick={onAbort}>
+            Abort merge
+          </button>
+        </>
+      }
+    >
+      <p className="modal-text">
+        {`Aborting throws ${subject} away and puts the working tree back as it was before it started.`}
+      </p>
+      {/* The one thing that is genuinely lost, said plainly: git restores the
+          pre-merge tree, which includes undoing every resolution made so far. */}
+      <p className="modal-hint">Any conflicts you have already resolved will be discarded.</p>
     </Modal>
   );
 }

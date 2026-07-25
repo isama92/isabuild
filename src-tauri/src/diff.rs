@@ -165,7 +165,7 @@ fn read_worktree_file(root: &Path, path: &str) -> Result<Option<Vec<u8>>, DiffEr
     }
 }
 
-fn canonical_root(root: &Path) -> Result<PathBuf, DiffError> {
+pub(crate) fn canonical_root(root: &Path) -> Result<PathBuf, DiffError> {
     root.canonicalize()
         .map_err(|e| DiffError::Io(root.display().to_string(), e.to_string()))
 }
@@ -188,7 +188,7 @@ fn check_relative(rel: &str) -> Result<(), DiffError> {
 /// Resolve `rel` for reading. `Ok(None)` means "not present" (deleted file).
 /// Canonicalising resolves symlinks, so a link pointing out of the repo is
 /// rejected while one staying inside it still reads.
-fn resolve_read(root: &Path, rel: &str) -> Result<Option<PathBuf>, DiffError> {
+pub(crate) fn resolve_read(root: &Path, rel: &str) -> Result<Option<PathBuf>, DiffError> {
     check_relative(rel)?;
     let target = root.join(rel);
     match target.canonicalize() {

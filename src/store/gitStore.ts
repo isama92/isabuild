@@ -12,7 +12,16 @@
 // `git_status` + `git_branch_state` round trips against a repo that is mid-write.
 
 import { create } from "zustand";
-import { getStatus, type FileEntry } from "../lib/gitStatus";
+import { getStatus, type ConflictEntry, type FileEntry } from "../lib/gitStatus";
+import {
+  abortMerge as invokeAbortMerge,
+  continueMerge as invokeContinueMerge,
+  getMergeState,
+  mergeRef,
+  resolvePath as invokeResolvePath,
+  type MergeState,
+  type PathResolution,
+} from "../lib/gitMerge";
 import {
   createBranch as invokeCreateBranch,
   deleteBranch as invokeDeleteBranch,
@@ -60,10 +69,14 @@ export interface GitState {
   repoRoot: string | null;
   staged: FileEntry[];
   unstaged: FileEntry[];
+  /** Conflicted paths; their own group, not unstaged rows (Part 6). */
+  conflicts: ConflictEntry[];
   phase: GitStatusPhase;
   error: string | null;
   /** Branch/upstream/ahead-behind, or null before the first successful read. */
   branch: BranchState | null;
+  /** What the repo is in the middle of, or null before the first read. */
+  mergeState: MergeState | null;
   op: RunningOp | null;
   opError: OpError | null;
   /** Transient one-liner, e.g. "3 changes stashed from main". */
@@ -77,13 +90,27 @@ export interface GitState {
   refresh: () => Promise<void>;
   /** Fetch branch state. Never throws; a failure leaves the last known state. */
   refreshBranch: () => Promise<void>;
-  /** Both reads, skipped while an operation is running. */
+  /** Fetch merge state. Never throws; a failure leaves the last known state. */
+  refreshMerge: () => Promise<void>;
+  /** All three reads, skipped while an operation is running. */
   refreshAll: () => Promise<void>;
 
   switchTo: (target: SwitchTarget, policy: DirtyPolicy) => Promise<boolean>;
   createBranch: (name: string, base?: string) => Promise<boolean>;
   deleteBranch: (name: string, force: boolean) => Promise<boolean>;
   renameBranch: (from: string, to: string) => Promise<boolean>;
+
+  /**
+   * Merge `reference` into the current branch. Resolves true when the merge
+   * completed; a merge that stopped on conflicts resolves **false** with the
+   * conflicts in `conflicts` and no `opError` — stopping on a conflict is an
+   * outcome, not a failure.
+   */
+  mergeBranch: (reference: string) => Promise<boolean>;
+  continueMerge: () => Promise<boolean>;
+  abortMerge: () => Promise<boolean>;
+  /** Resolve a whole conflicted path (the kinds with no markers). */
+  resolveConflictPath: (path: string, resolution: PathResolution) => Promise<boolean>;
 
   /** Start a network op. Resolves true when it exited zero. */
   runOp: (spec: RemoteOpSpec) => Promise<boolean>;
@@ -98,9 +125,11 @@ export const initialGitState = {
   repoRoot: null as string | null,
   staged: [] as FileEntry[],
   unstaged: [] as FileEntry[],
+  conflicts: [] as ConflictEntry[],
   phase: "idle" as GitStatusPhase,
   error: null as string | null,
   branch: null as BranchState | null,
+  mergeState: null as MergeState | null,
   op: null as RunningOp | null,
   opError: null as OpError | null,
   notice: null as string | null,
@@ -115,16 +144,20 @@ export const useGitStore = create<GitState>((set, get) => {
    * Run a mutating branch action: clear the last error, run it, refresh, and
    * turn a failure into `opError` rather than a rejection. Returns whether it
    * worked, so callers (dialogs) know whether to close.
+   *
+   * `command` is the equivalent command line for "Retry in terminal", where
+   * there is one worth offering. Empty means the modal shows no retry.
    */
   async function mutate(
     title: string,
     action: () => Promise<void>,
+    command = "",
   ): Promise<boolean> {
     set({ opError: null });
     try {
       await action();
     } catch (error) {
-      set({ opError: { title, detail: messageOf(error), command: "" } });
+      set({ opError: { title, detail: messageOf(error), command } });
       return false;
     }
     await get().refreshAll();
@@ -142,6 +175,7 @@ export const useGitStore = create<GitState>((set, get) => {
           repoRoot: status.repoRoot,
           staged: status.staged,
           unstaged: status.unstaged,
+          conflicts: status.conflicts,
           phase: "ready",
           error: null,
         });
@@ -162,12 +196,25 @@ export const useGitStore = create<GitState>((set, get) => {
       }
     },
 
+    refreshMerge: async () => {
+      const root = get().repoRoot;
+      if (!root) return; // status resolves the root first
+      try {
+        set({ mergeState: await getMergeState(root) });
+      } catch {
+        // Same reasoning as refreshBranch: keep the last known state rather than
+        // blanking the banner — and a banner that vanishes mid-merge is worse
+        // than a stale one, because it is the only route to Continue and Abort.
+      }
+    },
+
     refreshAll: async () => {
       // See the module note: an op is writing inside .git and re-firing the
       // watcher; reading mid-flight is wasted work. runOp refreshes at the end.
       if (get().op) return;
       await get().refresh();
       await get().refreshBranch();
+      await get().refreshMerge();
     },
 
     switchTo: async (target, policy) => {
@@ -221,6 +268,58 @@ export const useGitStore = create<GitState>((set, get) => {
     renameBranch: (from, to) =>
       mutate(`Could not rename ${from}`, () =>
         invokeRenameBranch(get().repoRoot ?? "", from, to),
+      ),
+
+    mergeBranch: async (reference) => {
+      set({ opError: null, notice: null });
+      let outcome;
+      try {
+        outcome = await mergeRef(get().repoRoot ?? "", reference);
+      } catch (error) {
+        set({
+          opError: {
+            title: `Could not merge ${reference}`,
+            detail: messageOf(error),
+            command: `git merge ${reference}`,
+          },
+        });
+        return false;
+      }
+      // A conflict is not an error and gets no modal: the banner and the
+      // Conflicts group are the whole point of this part, and a dialog on top of
+      // them would only be in the way.
+      set({
+        notice: outcome.conflicted
+          ? `Merge of ${reference} stopped on conflicts`
+          : `Merged ${reference}`,
+      });
+      await get().refreshAll();
+      return !outcome.conflicted;
+    },
+
+    continueMerge: () =>
+      mutate(
+        "Could not complete the merge",
+        () => invokeContinueMerge(get().repoRoot ?? ""),
+        "git merge --continue",
+      ).then((ok) => {
+        if (ok) set({ notice: "Merge committed" });
+        return ok;
+      }),
+
+    abortMerge: () =>
+      mutate(
+        "Could not abort the merge",
+        () => invokeAbortMerge(get().repoRoot ?? ""),
+        "git merge --abort",
+      ).then((ok) => {
+        if (ok) set({ notice: "Merge aborted" });
+        return ok;
+      }),
+
+    resolveConflictPath: (path, resolution) =>
+      mutate(`Could not resolve ${path}`, () =>
+        invokeResolvePath(get().repoRoot ?? "", path, resolution),
       ),
 
     runOp: async (spec) => {

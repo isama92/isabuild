@@ -17,15 +17,61 @@ export type BranchPick =
   | { kind: "local"; branch: LocalBranch }
   | { kind: "remote"; branch: RemoteBranch };
 
+/**
+ * The per-row "Merge into <current>" entry. One component for both sections so
+ * the disabled reasons cannot drift apart between them — a merge is refused for
+ * the same reasons wherever the row lives.
+ */
+function MergeAction({
+  reference,
+  into,
+  isCurrent,
+  busy,
+  blocked,
+  onMerge,
+}: {
+  reference: string;
+  into: string | null;
+  /** The row *is* the current branch, so there is nothing to merge. */
+  isCurrent: boolean;
+  busy: boolean;
+  blocked: string | null;
+  onMerge: () => void;
+}) {
+  const reason = isCurrent
+    ? "This is the branch you are on"
+    : into === null
+      ? "Merging needs a branch checked out"
+      : blocked;
+  return (
+    <button
+      type="button"
+      disabled={busy || reason !== null}
+      title={reason ?? `Merge ${reference} into ${into ?? "the current branch"}`}
+      onClick={onMerge}
+    >
+      {into === null ? "Merge…" : `Merge into ${into}…`}
+    </button>
+  );
+}
+
 interface BranchMenuProps {
   state: BranchState;
   onPick: (pick: BranchPick) => void;
   onNewBranch: () => void;
   onRename: (name: string) => void;
   onDelete: (name: string) => void;
+  /** Merge this ref into the current branch. `ref` is a branch or `origin/x`. */
+  onMerge: (reference: string) => void;
   onClose: () => void;
   /** Disables every action; set while an operation is running. */
   busy?: boolean;
+  /**
+   * Why merging is unavailable right now (an unborn HEAD, a merge already in
+   * progress), or null when it is available. Shown as the disabled action's
+   * tooltip, so a greyed-out Merge always says why.
+   */
+  mergeBlocked?: string | null;
 }
 
 export function BranchMenu({
@@ -34,8 +80,10 @@ export function BranchMenu({
   onNewBranch,
   onRename,
   onDelete,
+  onMerge,
   onClose,
   busy = false,
+  mergeBlocked = null,
 }: BranchMenuProps) {
   const [query, setQuery] = useState("");
   // null until the user has moved into the list, so the first ArrowDown lands on
@@ -178,6 +226,17 @@ export function BranchMenu({
               </button>
               {menuFor === branch.name && (
                 <div className="branch-row-actions">
+                  <MergeAction
+                    reference={branch.name}
+                    into={state.current}
+                    isCurrent={isCurrent}
+                    busy={busy}
+                    blocked={mergeBlocked}
+                    onMerge={() => {
+                      setMenuFor(null);
+                      onMerge(branch.name);
+                    }}
+                  />
                   <button
                     type="button"
                     disabled={busy || !isCurrent}
@@ -229,6 +288,34 @@ export function BranchMenu({
                 <span className="branch-row-name">{branch.name}</span>
                 <span className="branch-row-tag">check out</span>
               </button>
+              {/* Remote rows get the same actions affordance, with merge as its
+                  only entry: `git merge origin/main` is an everyday thing to
+                  want, and it needs no local branch to exist first. */}
+              <button
+                type="button"
+                className="branch-row-more"
+                aria-label={`Actions for ${branch.name}`}
+                aria-expanded={menuFor === branch.name}
+                disabled={busy}
+                onClick={() => setMenuFor(menuFor === branch.name ? null : branch.name)}
+              >
+                {"⋯"}
+              </button>
+              {menuFor === branch.name && (
+                <div className="branch-row-actions">
+                  <MergeAction
+                    reference={branch.name}
+                    into={state.current}
+                    isCurrent={false}
+                    busy={busy}
+                    blocked={mergeBlocked}
+                    onMerge={() => {
+                      setMenuFor(null);
+                      onMerge(branch.name);
+                    }}
+                  />
+                </div>
+              )}
             </div>
           );
         })}

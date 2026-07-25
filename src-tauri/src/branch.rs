@@ -319,7 +319,10 @@ pub fn resolve_remote(upstream: Option<&str>, remotes: &[String]) -> Result<Stri
 /// Reject a name git would read as an option or expand as a revision. Not all
 /// git subcommands accept `--` before a branch name, so unusable names are
 /// refused here instead of being passed through.
-fn reject_unusable(name: &str) -> Result<(), GitError> {
+///
+/// Shared with `crate::merge`, whose merge target is a ref in exactly the same
+/// position on the command line.
+pub(crate) fn reject_unusable(name: &str) -> Result<(), GitError> {
     if name.is_empty() {
         return Err(GitError::Invalid("enter a branch name".to_string()));
     }

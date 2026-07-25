@@ -14,8 +14,7 @@ export type ChangeStatus =
   | "renamed"
   | "copied"
   | "typeChanged"
-  | "untracked"
-  | "unmerged";
+  | "untracked";
 
 export interface FileEntry {
   path: string;
@@ -24,10 +23,44 @@ export interface FileEntry {
   status: ChangeStatus;
 }
 
+/**
+ * Which sides of the merge touched a conflicted path. Mirrors Rust
+ * `ConflictKind`, which derives it from the `u <XY>` code.
+ *
+ * Only `bothModified` and `bothAdded` have conflict markers in the file; the
+ * rest have no merged text at all and take a whole-file decision instead. See
+ * `conflictHasMarkers`.
+ */
+export type ConflictKind =
+  | "bothModified"
+  | "bothAdded"
+  | "bothDeleted"
+  | "addedByUs"
+  | "addedByThem"
+  | "deletedByUs"
+  | "deletedByThem"
+  | "unknown";
+
+export interface ConflictEntry {
+  path: string;
+  kind: ConflictKind;
+}
+
 export interface GitStatus {
   repoRoot: string;
   staged: FileEntry[];
   unstaged: FileEntry[];
+  /** Conflicted paths. Their own group: a conflict is not an unstaged change. */
+  conflicts: ConflictEntry[];
+}
+
+/**
+ * Whether this kind of conflict has markers in the working-tree file, i.e.
+ * whether opening the merge window has anything to show. Mirrors Rust
+ * `ConflictKind::has_markers`.
+ */
+export function conflictHasMarkers(kind: ConflictKind): boolean {
+  return kind === "bothModified" || kind === "bothAdded";
 }
 
 /**

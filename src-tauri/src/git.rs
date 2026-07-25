@@ -17,6 +17,12 @@
 //!
 //! `<XY>` is two chars: `X` = staged/index status, `Y` = worktree/unstaged
 //! status. A file mid-stage (e.g. `MM`) legitimately lands in both groups.
+//!
+//! On a `u` record the same two letters mean something else entirely: which
+//! *side* of the merge touched the path (see [`ConflictKind`]). Conflicts get
+//! their own group for that reason — `UU` has markers in the file to accept while
+//! `UD` has no text at all, and Part 6 cannot offer the right action without the
+//! distinction.
 
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
@@ -35,7 +41,6 @@ pub enum ChangeStatus {
     Copied,
     TypeChanged,
     Untracked,
-    Unmerged,
 }
 
 /// One changed path within a group. `orig_path` is set only for renames/copies.
@@ -48,14 +53,64 @@ pub struct FileEntry {
     pub status: ChangeStatus,
 }
 
-/// The repo's working-tree status, split into staged (index) and unstaged
-/// (worktree + untracked + conflicts) groups.
+/// Which sides of a merge touched a conflicted path, from the `<XY>` of a
+/// porcelain v2 `u` record. git's documented table (`git status` short format):
+///
+/// | XY | meaning        | XY | meaning       |
+/// |----|----------------|----|---------------|
+/// | `UU` | both modified  | `AA` | both added    |
+/// | `DD` | both deleted   | `AU` | added by us   |
+/// | `UA` | added by them  | `UD` | deleted by them |
+/// | `DU` | deleted by us  |    |               |
+///
+/// The distinction is what decides how a conflict can be resolved at all: the
+/// first two have conflict markers in the working-tree file, the rest have no
+/// text to merge and only a whole-file choice.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum ConflictKind {
+    BothModified,
+    BothAdded,
+    BothDeleted,
+    AddedByUs,
+    AddedByThem,
+    DeletedByUs,
+    DeletedByThem,
+    /// An `<XY>` git has never documented. Rendered as a conflict with no
+    /// assumed shape rather than dropped, so it cannot silently disappear from
+    /// the panel and strand the merge.
+    Unknown,
+}
+
+impl ConflictKind {
+    /// Whether the working-tree file holds conflict markers to resolve. The
+    /// other kinds have no merged text at all, so they only take a whole-file
+    /// decision.
+    pub fn has_markers(self) -> bool {
+        matches!(self, ConflictKind::BothModified | ConflictKind::BothAdded)
+    }
+}
+
+/// One conflicted path.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ConflictEntry {
+    pub path: String,
+    pub kind: ConflictKind,
+}
+
+/// The repo's working-tree status: staged (index), unstaged (worktree +
+/// untracked) and conflicts.
+///
+/// Conflicts are their own group rather than unstaged rows, so a path is
+/// reported exactly once and the UI can offer the actions its kind supports.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct GitStatus {
     pub repo_root: String,
     pub staged: Vec<FileEntry>,
     pub unstaged: Vec<FileEntry>,
+    pub conflicts: Vec<ConflictEntry>,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -106,11 +161,12 @@ pub fn run_status(root: &Path) -> Result<GitStatus, GitError> {
     if !output.status.success() {
         return Err(GitError::CommandFailed(stderr_of(&output)));
     }
-    let (staged, unstaged) = parse_porcelain_v2(&output.stdout);
+    let (staged, unstaged, conflicts) = parse_porcelain_v2(&output.stdout);
     Ok(GitStatus {
         repo_root: root.to_string_lossy().into_owned(),
         staged,
         unstaged,
+        conflicts,
     })
 }
 
@@ -185,10 +241,11 @@ pub(crate) fn map_io_err(e: std::io::Error) -> GitError {
     }
 }
 
-/// Parse `git status --porcelain=v2 -z` output into (staged, unstaged) groups.
-pub fn parse_porcelain_v2(bytes: &[u8]) -> (Vec<FileEntry>, Vec<FileEntry>) {
+/// Parse `git status --porcelain=v2 -z` output into (staged, unstaged, conflicts).
+pub fn parse_porcelain_v2(bytes: &[u8]) -> (Vec<FileEntry>, Vec<FileEntry>, Vec<ConflictEntry>) {
     let mut staged = Vec::new();
     let mut unstaged = Vec::new();
+    let mut conflicts = Vec::new();
 
     // Tokens are NUL-terminated; `split` also yields a trailing empty slice.
     let mut tokens = bytes.split(|&b| b == 0).filter(|t| !t.is_empty());
@@ -212,14 +269,13 @@ pub fn parse_porcelain_v2(bytes: &[u8]) -> (Vec<FileEntry>, Vec<FileEntry>) {
                 }
             }
             Some(b'u') => {
-                // Conflicts are surfaced once, in the Changes group. Real
-                // conflict handling is Part 6.
+                // Its own group, keeping the XY: which side of the merge touched
+                // the path decides what resolving it can even mean.
                 let line = String::from_utf8_lossy(token);
-                if let Some((_, path)) = fields(&line, 11) {
-                    unstaged.push(FileEntry {
+                if let Some((xy, path)) = fields(&line, 11) {
+                    conflicts.push(ConflictEntry {
                         path: path.to_string(),
-                        orig_path: None,
-                        status: ChangeStatus::Unmerged,
+                        kind: conflict_kind(xy),
                     });
                 }
             }
@@ -239,7 +295,21 @@ pub fn parse_porcelain_v2(bytes: &[u8]) -> (Vec<FileEntry>, Vec<FileEntry>) {
         }
     }
 
-    (staged, unstaged)
+    (staged, unstaged, conflicts)
+}
+
+/// Map a `u` record's `<XY>` to a [`ConflictKind`].
+fn conflict_kind(xy: &str) -> ConflictKind {
+    match xy {
+        "UU" => ConflictKind::BothModified,
+        "AA" => ConflictKind::BothAdded,
+        "DD" => ConflictKind::BothDeleted,
+        "AU" => ConflictKind::AddedByUs,
+        "UA" => ConflictKind::AddedByThem,
+        "UD" => ConflictKind::DeletedByThem,
+        "DU" => ConflictKind::DeletedByUs,
+        _ => ConflictKind::Unknown,
+    }
 }
 
 /// Split a space-delimited record into exactly `count` fields (the last field
@@ -310,13 +380,13 @@ mod tests {
 
     #[test]
     fn empty_input_yields_no_entries() {
-        assert_eq!(parse_porcelain_v2(&[]), (vec![], vec![]));
-        assert_eq!(parse_porcelain_v2(&z(&[])), (vec![], vec![]));
+        assert_eq!(parse_porcelain_v2(&[]), (vec![], vec![], vec![]));
+        assert_eq!(parse_porcelain_v2(&z(&[])), (vec![], vec![], vec![]));
     }
 
     #[test]
     fn unstaged_modification_goes_to_unstaged_only() {
-        let (staged, unstaged) =
+        let (staged, unstaged, _) =
             parse_porcelain_v2(&z(&["1 .M N... 100644 100644 100644 h h file.txt"]));
         assert!(staged.is_empty());
         assert_eq!(
@@ -331,7 +401,7 @@ mod tests {
 
     #[test]
     fn staged_addition_goes_to_staged_only() {
-        let (staged, unstaged) =
+        let (staged, unstaged, _) =
             parse_porcelain_v2(&z(&["1 A. N... 000000 100644 100644 h h new.txt"]));
         assert_eq!(
             staged,
@@ -346,7 +416,7 @@ mod tests {
 
     #[test]
     fn staged_and_unstaged_same_file_appears_in_both_groups() {
-        let (staged, unstaged) =
+        let (staged, unstaged, _) =
             parse_porcelain_v2(&z(&["1 MM N... 100644 100644 100644 h h both.txt"]));
         assert_eq!(staged.len(), 1);
         assert_eq!(unstaged.len(), 1);
@@ -358,16 +428,17 @@ mod tests {
 
     #[test]
     fn staged_and_unstaged_deletions_map_to_the_right_group() {
-        let (staged, _) = parse_porcelain_v2(&z(&["1 D. N... 100644 000000 000000 h h gone.txt"]));
+        let (staged, _, _) =
+            parse_porcelain_v2(&z(&["1 D. N... 100644 000000 000000 h h gone.txt"]));
         assert_eq!(staged[0].status, ChangeStatus::Deleted);
-        let (_, unstaged) =
+        let (_, unstaged, _) =
             parse_porcelain_v2(&z(&["1 .D N... 100644 100644 000000 h h vanished.txt"]));
         assert_eq!(unstaged[0].status, ChangeStatus::Deleted);
     }
 
     #[test]
     fn rename_carries_orig_path_and_consumes_the_extra_token() {
-        let (staged, unstaged) = parse_porcelain_v2(&z(&[
+        let (staged, unstaged, _) = parse_porcelain_v2(&z(&[
             "2 R. N... 100644 100644 100644 h h R100 renamed.txt",
             "original.txt",
         ]));
@@ -386,7 +457,7 @@ mod tests {
 
     #[test]
     fn untracked_file_goes_to_unstaged() {
-        let (staged, unstaged) = parse_porcelain_v2(&z(&["? brand-new.txt"]));
+        let (staged, unstaged, _) = parse_porcelain_v2(&z(&["? brand-new.txt"]));
         assert!(staged.is_empty());
         assert_eq!(
             unstaged,
@@ -399,19 +470,73 @@ mod tests {
     }
 
     #[test]
-    fn unmerged_file_is_a_single_conflict_in_unstaged() {
-        let (staged, unstaged) = parse_porcelain_v2(&z(&[
+    fn unmerged_file_is_a_conflict_and_nothing_else() {
+        // The group split matters: a conflicted path used to land in `unstaged`
+        // too, which showed it twice and lost the XY the resolution needs.
+        let (staged, unstaged, conflicts) = parse_porcelain_v2(&z(&[
             "u UU N... 100644 100644 100644 100644 h1 h2 h3 conflict.txt",
         ]));
         assert!(staged.is_empty());
+        assert!(unstaged.is_empty(), "a conflict is not an unstaged change");
         assert_eq!(
-            unstaged,
-            vec![FileEntry {
+            conflicts,
+            vec![ConflictEntry {
                 path: "conflict.txt".into(),
-                orig_path: None,
-                status: ChangeStatus::Unmerged,
+                kind: ConflictKind::BothModified,
             }]
         );
+    }
+
+    #[test]
+    fn every_documented_xy_maps_to_its_conflict_kind() {
+        // git's own table. Getting UD and DU the wrong way round would offer
+        // "keep my version" for a file the *other* side kept.
+        for (xy, expected) in [
+            ("UU", ConflictKind::BothModified),
+            ("AA", ConflictKind::BothAdded),
+            ("DD", ConflictKind::BothDeleted),
+            ("AU", ConflictKind::AddedByUs),
+            ("UA", ConflictKind::AddedByThem),
+            ("UD", ConflictKind::DeletedByThem),
+            ("DU", ConflictKind::DeletedByUs),
+        ] {
+            let record = format!("u {xy} N... 100644 100644 100644 100644 h1 h2 h3 path.txt");
+            let (_, _, conflicts) = parse_porcelain_v2(&z(&[&record]));
+            assert_eq!(conflicts[0].kind, expected, "XY {xy}");
+        }
+    }
+
+    #[test]
+    fn an_undocumented_xy_is_kept_as_an_unknown_conflict() {
+        // Dropping it would strand the merge: the file would be missing from the
+        // panel while git still refuses to continue until it is resolved.
+        let (_, _, conflicts) = parse_porcelain_v2(&z(&[
+            "u XY N... 100644 100644 100644 100644 h1 h2 h3 odd.txt",
+        ]));
+        assert_eq!(
+            conflicts,
+            vec![ConflictEntry {
+                path: "odd.txt".into(),
+                kind: ConflictKind::Unknown,
+            }]
+        );
+    }
+
+    #[test]
+    fn only_marker_bearing_kinds_report_markers() {
+        // What decides whether the merge window has anything to show.
+        assert!(ConflictKind::BothModified.has_markers());
+        assert!(ConflictKind::BothAdded.has_markers());
+        for kind in [
+            ConflictKind::BothDeleted,
+            ConflictKind::AddedByUs,
+            ConflictKind::AddedByThem,
+            ConflictKind::DeletedByUs,
+            ConflictKind::DeletedByThem,
+            ConflictKind::Unknown,
+        ] {
+            assert!(!kind.has_markers(), "{kind:?} has no merged text");
+        }
     }
 
     #[test]
@@ -422,7 +547,7 @@ mod tests {
         bytes.extend_from_slice(b".txt");
         bytes.push(0);
 
-        let (_, unstaged) = parse_porcelain_v2(&bytes);
+        let (_, unstaged, _) = parse_porcelain_v2(&bytes);
         assert_eq!(unstaged.len(), 1);
         assert_eq!(unstaged[0].status, ChangeStatus::Modified);
         // The bad byte becomes U+FFFD; parsing must not panic.
@@ -432,20 +557,28 @@ mod tests {
 
     #[test]
     fn path_with_spaces_is_preserved() {
-        let (_, unstaged) =
+        let (_, unstaged, _) =
             parse_porcelain_v2(&z(&["1 .M N... 100644 100644 100644 h h my notes.txt"]));
         assert_eq!(unstaged[0].path, "my notes.txt");
     }
 
     #[test]
     fn mixed_batch_parses_every_record_in_order() {
-        let (staged, unstaged) = parse_porcelain_v2(&z(&[
+        let (staged, unstaged, conflicts) = parse_porcelain_v2(&z(&[
             "1 A. N... 000000 100644 100644 h h added.txt",
             "1 .M N... 100644 100644 100644 h h edited.txt",
             "2 R. N... 100644 100644 100644 h h R100 new-name.txt",
             "old-name.txt",
+            "u UU N... 100644 100644 100644 100644 h1 h2 h3 clashed.txt",
             "? untracked.txt",
         ]));
+        assert_eq!(
+            conflicts,
+            vec![ConflictEntry {
+                path: "clashed.txt".into(),
+                kind: ConflictKind::BothModified,
+            }]
+        );
         assert_eq!(
             staged
                 .iter()

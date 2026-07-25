@@ -1,0 +1,7 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "merge",
+  "description": "Merge windows (one per conflicted file, label merge-<hash>): core APIs including events, plus closing themselves. No `destroy` needed, unlike the diff windows: the conflict pane is read-only, so there is no buffer to flush before the close goes through.",
+  "windows": ["merge-*"],
+  "permissions": ["core:default", "core:window:allow-close"]
+}

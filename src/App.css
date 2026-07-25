@@ -338,8 +338,126 @@ body {
   color: #6cb6ff;
 }
 
-.status-badge--unmerged {
+.status-badge--conflict {
   color: #e08f4c;
+}
+
+/* --- Merge conflicts (Part 6) --- */
+
+/* The banner above the file groups. Bordered rather than tinted across the whole
+   panel: it has to read as a state the repo is in, without making the file list
+   underneath it look like part of an error. */
+.merge-banner {
+  margin: 4px 8px 8px;
+  padding: 8px 10px;
+  border: 1px solid #6b4a1f;
+  border-left: 3px solid #e08f4c;
+  border-radius: 3px;
+  background: #2b2318;
+}
+
+.merge-banner--unsupported {
+  border-color: #4a4a4a;
+  border-left-color: #8a8a8a;
+  background: #262626;
+}
+
+.merge-banner-title {
+  margin: 0;
+  font-weight: 600;
+  color: #e8e8e8;
+}
+
+.merge-banner-detail {
+  margin: 4px 0 0;
+  color: #b9b9b9;
+}
+
+.merge-banner-actions {
+  display: flex;
+  gap: 6px;
+  margin-top: 8px;
+}
+
+.merge-banner-button {
+  padding: 3px 10px;
+  border: 1px solid #3c3c3c;
+  border-radius: 2px;
+  background: #333;
+  color: #cccccc;
+  font: inherit;
+  cursor: pointer;
+}
+
+.merge-banner-button:hover:not(:disabled) {
+  background: #3d3d3d;
+}
+
+.merge-banner-button:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.merge-banner-button--primary:not(:disabled) {
+  border-color: #0e639c;
+  background: #0e639c;
+  color: #ffffff;
+}
+
+.merge-banner-button--danger:not(:disabled):hover {
+  border-color: #a1260d;
+  background: #a1260d;
+  color: #ffffff;
+}
+
+.status-group--conflicts .status-group-title {
+  color: #e08f4c;
+}
+
+/* A conflicted row with no window to open: same layout as .status-row, minus
+   every affordance that would suggest it is clickable. */
+.status-row--static {
+  cursor: default;
+}
+
+.status-row--static:hover {
+  background: transparent;
+}
+
+.conflict-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px;
+  /* Lines up under the path, past the badge column. */
+  padding: 0 12px 4px 34px;
+}
+
+.conflict-kind {
+  margin-right: 2px;
+  color: #8a8a8a;
+  font-size: 11px;
+}
+
+.conflict-action {
+  padding: 1px 6px;
+  border: 1px solid #3c3c3c;
+  border-radius: 2px;
+  background: #2d2d2d;
+  color: #cccccc;
+  font: inherit;
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.conflict-action:hover {
+  background: #3d3d3d;
+}
+
+.conflict-action--danger:hover {
+  border-color: #a1260d;
+  background: #a1260d;
+  color: #ffffff;
 }
 
 /* --- Branch & remote (Part 5) --- */
