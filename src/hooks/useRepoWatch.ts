@@ -8,6 +8,10 @@
 // one the user runs in the bottom terminal — refreshes the branch UI with no
 // extra plumbing and no polling. The store skips reads while one of our own
 // operations is in flight; see its module note.
+//
+// This hook is a dumb forwarder and must stay one: overlapping `repo://changed`
+// events are coalesced in the store, so a debounce here would only add latency on
+// top of the backend's own debounce window.
 
 import { useEffect } from "react";
 import { onRepoChanged, startWatch } from "../lib/gitStatus";

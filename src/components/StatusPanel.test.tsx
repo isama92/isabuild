@@ -1,5 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { act } from "react";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { invoke } from "@tauri-apps/api/core";
 import { StatusPanel } from "./StatusPanel";
 import { initialGitState, useGitStore } from "../store/gitStore";
 import { initialLayoutState, useLayoutStore } from "../store/layoutStore";
@@ -10,9 +12,46 @@ import { mergeState } from "../test/factories";
 
 vi.mock("../lib/diffWindow", () => ({ openDiffWindow: vi.fn() }));
 vi.mock("../lib/mergeWindow", () => ({ openMergeWindow: vi.fn() }));
+vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn() }));
 
 const openDiffWindowMock = vi.mocked(openDiffWindow);
 const openMergeWindowMock = vi.mocked(openMergeWindow);
+const invokeMock = vi.mocked(invoke);
+
+const CLEAN_STATUS = { repoRoot: "/repo", staged: [], unstaged: [], conflicts: [] };
+
+/** A promise the test resolves by hand, so it can assert mid-read. */
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((settle) => {
+    resolve = settle;
+  });
+  return { promise, resolve };
+}
+
+/**
+ * Start a real `refresh()` whose `git_status` will not answer until released.
+ *
+ * Driving the action rather than presetting `phase` is the whole point: the
+ * Part 9 bug lived in the window between the call and its answer, so a test that
+ * sets the end state can never see it.
+ */
+function gatedRefresh() {
+  const gate = deferred<typeof CLEAN_STATUS>();
+  invokeMock.mockReturnValueOnce(gate.promise);
+  let pending!: Promise<void>;
+  act(() => {
+    pending = useGitStore.getState().refresh();
+  });
+  return {
+    async release(status = CLEAN_STATUS) {
+      gate.resolve(status);
+      await act(async () => {
+        await pending;
+      });
+    },
+  };
+}
 
 beforeEach(() => {
   useGitStore.setState(initialGitState);
@@ -151,6 +190,98 @@ describe("StatusPanel", () => {
     render(<StatusPanel />);
     fireEvent.click(screen.getByRole("button", { name: /close status panel/i }));
     expect(useLayoutStore.getState().statusPanelVisible).toBe(false);
+  });
+});
+
+describe("StatusPanel across a refresh (Part 9)", () => {
+  it("keeps 'No changes' on screen while a refresh is in flight", async () => {
+    // The bug: refresh() opened with set({ phase: "loading" }) and the empty
+    // state was gated on phase === "ready", so a clean repo rendered an empty
+    // body for the whole of every read — several times a second in dev, because
+    // the watcher covered target/ and node_modules/. A dirty repo never showed
+    // it: its rows are not gated on the phase (see the test below).
+    useGitStore.setState({ ...initialGitState, phase: "ready", repoRoot: "/repo" });
+    render(<StatusPanel />);
+    expect(screen.getByText("No changes")).toBeInTheDocument();
+
+    const read = gatedRefresh();
+    // The assertion the old implementation failed, on the very next line: it set
+    // the phase before its first await, so act() had already flushed the blank.
+    expect(screen.getByText("No changes")).toBeInTheDocument();
+
+    await read.release();
+    expect(screen.getByText("No changes")).toBeInTheDocument();
+  });
+
+  it("never shows the loading placeholder for a refresh that already has data", async () => {
+    // The constraint that stops the fix reintroducing the bug in a new costume:
+    // "Loading changes…" is for "nothing read yet", never for "reading now", or a
+    // clean repo would alternate between the two messages instead of blanking.
+    useGitStore.setState({ ...initialGitState, phase: "ready", repoRoot: "/repo" });
+    render(<StatusPanel />);
+
+    const read = gatedRefresh();
+    expect(screen.queryByText(/loading changes/i)).not.toBeInTheDocument();
+
+    await read.release();
+    expect(screen.queryByText(/loading changes/i)).not.toBeInTheDocument();
+  });
+
+  it("keeps the file rows on screen while a refresh is in flight", () => {
+    // The behaviour a dirty repo always had, now asserted rather than incidental.
+    useGitStore.setState({
+      ...initialGitState,
+      phase: "ready",
+      repoRoot: "/repo",
+      unstaged: [{ path: "src/b.ts", status: "modified" }],
+    });
+    render(<StatusPanel />);
+
+    gatedRefresh();
+
+    expect(screen.getByText("b.ts")).toBeInTheDocument();
+  });
+
+  it("says it is loading before the first read has landed", () => {
+    // Nothing read yet, which is also every project switch. Previously a blank
+    // panel body with no explanation.
+    render(<StatusPanel />);
+    expect(screen.getByText("Loading changes…")).toBeInTheDocument();
+    expect(screen.queryByText(/no changes/i)).not.toBeInTheDocument();
+  });
+
+  it("goes back to loading when a project switch resets the store", () => {
+    useGitStore.setState({ ...initialGitState, phase: "ready", repoRoot: "/repo" });
+    render(<StatusPanel />);
+    expect(screen.getByText("No changes")).toBeInTheDocument();
+
+    // What projectStore.resetForProjectSwitch does to this store.
+    act(() => {
+      useGitStore.setState(initialGitState);
+    });
+
+    expect(screen.getByText("Loading changes…")).toBeInTheDocument();
+    expect(screen.queryByText(/no changes/i)).not.toBeInTheDocument();
+  });
+
+  it("keeps the error on screen while a retry is in flight, then shows the result", async () => {
+    // Same rule as the empty state, and the reason the error arm is checked
+    // first: swapping an actionable message for a meaningless placeholder at
+    // 3 Hz would be the identical bug on a broken repo.
+    useGitStore.setState({
+      ...initialGitState,
+      phase: "error",
+      error: "'/x' is not inside a git repository",
+    });
+    render(<StatusPanel />);
+
+    const read = gatedRefresh();
+    expect(screen.getByText(/not inside a git repository/i)).toBeInTheDocument();
+    expect(screen.queryByText(/loading changes/i)).not.toBeInTheDocument();
+
+    await read.release();
+    expect(screen.queryByText(/not inside a git repository/i)).not.toBeInTheDocument();
+    expect(screen.getByText("No changes")).toBeInTheDocument();
   });
 });
 

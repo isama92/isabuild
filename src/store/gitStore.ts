@@ -10,6 +10,16 @@
 // Reads are therefore skipped while an operation is in flight and run once when
 // it finishes; without that, a fetch would trigger dozens of pointless
 // `git_status` + `git_branch_state` round trips against a repo that is mid-write.
+//
+// Two rules from Part 9, both about reads that overlap each other:
+//
+//   * `phase` is the *settled* outcome of the last read and never regresses
+//     while one is in flight. See GitStatusPhase for what gating on a transient
+//     value cost us.
+//   * `refreshAll` is coalesced: at most one cascade runs and at most one waits,
+//     and unless the operation guard above skips the read entirely, it resolves
+//     after a read that *began after the call* — so a mutation awaiting it is not
+//     handed the picture from before its own write. See requestCascade.
 
 import { create } from "zustand";
 import { getStatus, type ConflictEntry, type FileEntry } from "../lib/gitStatus";
@@ -43,7 +53,20 @@ import {
   type RemoteOpSpec,
 } from "../lib/gitRemote";
 
-export type GitStatusPhase = "idle" | "loading" | "ready" | "error";
+/**
+ * The *settled* outcome of the last status read: never read, last read
+ * succeeded, last read failed.
+ *
+ * Deliberately has no in-flight member. A refresh leaves the previous phase
+ * alone so the panel keeps rendering the last known result for the duration of
+ * the read, which is what a dirty repo always did by accident — its stale rows
+ * are not gated on the phase. A clean repo was not so lucky: a transient
+ * `"loading"` failed the empty state's `phase === "ready"` gate, so "No changes"
+ * vanished and came back on every watcher event, several times a second (Part 9).
+ * Removing the member is what makes that unrepresentable rather than merely
+ * fixed.
+ */
+export type GitStatusPhase = "idle" | "ready" | "error";
 
 /** A network operation in flight. */
 export interface RunningOp {
@@ -90,13 +113,21 @@ export interface GitState {
    * backend holds it); later calls reuse the resolved root, which is why
    * switching projects resets this store. Never throws — a failure (no project
    * open, or not a git repository) lands in `phase: "error"` + `error`.
+   *
+   * Leaves `phase` and the file lists it found alone until the read lands, so
+   * the panel has something to render throughout.
    */
   refresh: () => Promise<void>;
   /** Fetch branch state. Never throws; a failure leaves the last known state. */
   refreshBranch: () => Promise<void>;
   /** Fetch merge state. Never throws; a failure leaves the last known state. */
   refreshMerge: () => Promise<void>;
-  /** All three reads, skipped while an operation is running. */
+  /**
+   * All three reads, skipped while an operation is running, and coalesced:
+   * overlapping calls share one cascade plus at most one trailing run. When it
+   * does read, it resolves after a status read that *began after the call*, so
+   * awaiting it after a write never yields the write's own "before" picture.
+   */
   refreshAll: () => Promise<void>;
 
   switchTo: (target: SwitchTarget, policy: DirtyPolicy) => Promise<boolean>;
@@ -175,11 +206,70 @@ export const useGitStore = create<GitState>((set, get) => {
     return true;
   }
 
+  /**
+   * The cascade currently running, and the promise for the one call queued
+   * behind it.
+   *
+   * The watcher can fire `repo://changed` several times a second, and each
+   * cascade is three reads, around thirteen git subprocesses. Overlapping runs
+   * are pure waste, so at most one runs and at most one waits: the waiting one
+   * starts after the running one finishes, which keeps the final state fresh
+   * however many events arrived while we were reading.
+   *
+   * Closure state rather than store fields, like runOp's `opId`. Nothing renders
+   * it, and a promise slot in the store would be blanked by projectStore's
+   * project-switch reset while a cascade was still running, which would let an
+   * overlapping one start: the opposite of the point.
+   */
+  let cascade: Promise<void> | null = null;
+  let queued: Promise<void> | null = null;
+
+  /**
+   * The three reads, coalesced with whatever is already in flight.
+   *
+   * Resolves *after* a status read that began after this call, which is why a
+   * late caller joins the queued run rather than the one already in flight: a
+   * mutation awaiting this must not be handed a read that started before its own
+   * write.
+   *
+   * The exception is deliberate: the queued run re-enters through the action, so
+   * an operation that has started by then skips the read altogether and every
+   * joined caller resolves without one. `runOp` refreshes when it finishes.
+   */
+  function requestCascade(): Promise<void> {
+    if (cascade === null) {
+      cascade = (async () => {
+        try {
+          await get().refresh();
+          await get().refreshBranch();
+          await get().refreshMerge();
+        } catch {
+          // All three record their own failures and never throw. Swallowing a
+          // hypothetical one anyway is what stops a rejected cascade sitting in
+          // `queued` and killing every later refresh for the rest of the session.
+        } finally {
+          cascade = null;
+        }
+      })();
+      return cascade;
+    }
+    if (queued === null) {
+      // Back through the action, so the operation guard covers the queued run
+      // too: an operation that started mid-cascade must still suppress the read.
+      queued = cascade.then(() => {
+        queued = null;
+        return get().refreshAll();
+      });
+    }
+    return queued;
+  }
+
   return {
     ...initialGitState,
 
     refresh: async () => {
-      set({ phase: "loading" });
+      // No phase change on the way in — see GitStatusPhase. There is nothing to
+      // clear either: on success every list is replaced wholesale below.
       try {
         const status = await getStatus(get().repoRoot ?? undefined);
         set({
@@ -223,9 +313,7 @@ export const useGitStore = create<GitState>((set, get) => {
       // See the module note: an op is writing inside .git and re-firing the
       // watcher; reading mid-flight is wasted work. runOp refreshes at the end.
       if (get().op) return;
-      await get().refresh();
-      await get().refreshBranch();
-      await get().refreshMerge();
+      await requestCascade();
     },
 
     switchTo: async (target, policy) => {

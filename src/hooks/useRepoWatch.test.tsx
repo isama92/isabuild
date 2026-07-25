@@ -84,6 +84,30 @@ describe("useRepoWatch", () => {
     expect(getStatusMock).toHaveBeenCalledTimes(1);
   });
 
+  it("collapses a burst of repo://changed into one read plus one (Part 9)", async () => {
+    // The watcher can fire several times a second, and each event used to start
+    // its own cascade of three reads. This is the user-visible scenario end to
+    // end: the hook stays a dumb forwarder and the store absorbs the burst.
+    render(<Harness />);
+    await flush();
+    getStatusMock.mockClear();
+
+    let release!: (value: GitStatus) => void;
+    getStatusMock.mockImplementationOnce(
+      () => new Promise<GitStatus>((resolve) => (release = resolve)),
+    );
+
+    repoChangedCb!();
+    repoChangedCb!();
+    repoChangedCb!();
+    expect(getStatusMock).toHaveBeenCalledTimes(1);
+
+    release({ repoRoot: "/repo", staged: [], unstaged: [], conflicts: [] });
+    await flush();
+
+    expect(getStatusMock).toHaveBeenCalledTimes(2);
+  });
+
   it("reads the branch state on mount, after the root is resolved", async () => {
     render(<Harness />);
     await flush();

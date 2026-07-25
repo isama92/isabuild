@@ -1,8 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
-import { initialGitState, useGitStore } from "./gitStore";
+import { initialGitState, useGitStore, type GitStatusPhase } from "./gitStore";
 import type { BranchState } from "../lib/gitBranch";
+import type { GitStatus } from "../lib/gitStatus";
 import { mergeState } from "../test/factories";
 
 vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn() }));
@@ -10,7 +11,7 @@ vi.mock("@tauri-apps/api/event", () => ({ listen: vi.fn() }));
 const invokeMock = vi.mocked(invoke);
 const listenMock = vi.mocked(listen);
 
-const EMPTY_STATUS = { repoRoot: "/repo", staged: [], unstaged: [], conflicts: [] };
+const EMPTY_STATUS: GitStatus = { repoRoot: "/repo", staged: [], unstaged: [], conflicts: [] };
 
 function branchState(overrides: Partial<BranchState> = {}): BranchState {
   return {
@@ -51,6 +52,41 @@ function fire(name: string, payload: unknown) {
 /** Let queued microtasks and timers run, as useRepoWatch.test.tsx does. */
 function tick(): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, 0));
+}
+
+/** A promise the test resolves by hand, so it can assert mid-read. */
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((settle) => {
+    resolve = settle;
+  });
+  return { promise, resolve };
+}
+
+/**
+ * Route the three reads with `git_status` gated: the first call hangs until
+ * `release()`, later ones answer at once.
+ *
+ * This is what makes the coalescing assertions deterministic with no timers:
+ * `refreshAll` reaches `invoke` before its first await, so the count is already
+ * correct on the line after the calls.
+ */
+function gatedReads(laterStatus: GitStatus = EMPTY_STATUS) {
+  const gate = deferred<GitStatus>();
+  let statusCalls = 0;
+  invokeMock.mockImplementation((command: string) => {
+    if (command === "git_status") {
+      statusCalls += 1;
+      return statusCalls === 1 ? gate.promise : Promise.resolve(laterStatus);
+    }
+    if (command === "git_branch_state") return Promise.resolve(branchState());
+    if (command === "git_merge_state") return Promise.resolve(mergeState("none"));
+    return Promise.resolve(undefined);
+  });
+  return {
+    statusCalls: () => statusCalls,
+    release: () => gate.resolve(EMPTY_STATUS),
+  };
 }
 
 /**
@@ -128,6 +164,22 @@ describe("gitStore.refresh", () => {
     const s = useGitStore.getState();
     expect(s.phase).toBe("error");
     expect(s.error).toMatch(/not inside a git repository/);
+  });
+
+  it("never leaves the settled phase while a read is in flight (Part 9)", async () => {
+    // `phase` is the settled outcome, not a progress flag. A transient value here
+    // is what made the Status panel's empty state vanish on every watcher event,
+    // several times a second. Asserting over every emission rather than the end
+    // state, because the end state was always right.
+    invokeMock.mockResolvedValue(EMPTY_STATUS);
+    await useGitStore.getState().refresh();
+
+    const seen = new Set<GitStatusPhase>();
+    const unsubscribe = useGitStore.subscribe((state) => seen.add(state.phase));
+    await useGitStore.getState().refresh();
+    unsubscribe();
+
+    expect([...seen]).toEqual(["ready"]);
   });
 });
 
@@ -215,6 +267,104 @@ describe("gitStore.refreshAll", () => {
     useGitStore.setState({ repoRoot: "/repo", op: { id: "fetch-1", kind: "fetch", progress: "" } });
     await useGitStore.getState().refreshAll();
     expect(invokeMock).not.toHaveBeenCalled();
+  });
+});
+
+// The cascade slots are closure state inside the store module, so `beforeEach`'s
+// merge setState cannot reset them: every test here must release its gate and
+// await everything it started, or the leftovers leak into the next one.
+describe("gitStore.refreshAll coalescing (Part 9)", () => {
+  it("runs one cascade for overlapping calls, then exactly one more", async () => {
+    // The watcher can fire several times a second, and each cascade is three
+    // reads and around thirteen git subprocesses. One runs, one waits, and the
+    // one that waits starts afterwards so the final state is still fresh.
+    const reads = gatedReads();
+
+    const inflight = [
+      useGitStore.getState().refreshAll(),
+      useGitStore.getState().refreshAll(),
+      useGitStore.getState().refreshAll(),
+    ];
+    expect(reads.statusCalls()).toBe(1);
+
+    reads.release();
+    await Promise.all(inflight);
+
+    // One trailing run, not two more.
+    expect(reads.statusCalls()).toBe(2);
+  });
+
+  it("releases the slot, so a later call still reads", async () => {
+    const reads = gatedReads();
+    const first = useGitStore.getState().refreshAll();
+    reads.release();
+    await first;
+
+    await useGitStore.getState().refreshAll();
+
+    expect(reads.statusCalls()).toBe(2);
+  });
+
+  it("resolves a mutation against a read that began after its own write", async () => {
+    // Why a late caller joins the queued run rather than the in-flight one: a
+    // mutation awaiting refreshAll must never be handed the picture from before
+    // its write. A naive "share the promise already running" implementation
+    // resolves createBranch against the first payload and fails here.
+    const reads = gatedReads({ ...EMPTY_STATUS, staged: [{ path: "made.ts", status: "added" }] });
+
+    const watcherRun = useGitStore.getState().refreshAll();
+    const created = useGitStore.getState().createBranch("feature");
+    await tick(); // let mutate() get past the create and into refreshAll
+    reads.release();
+    await Promise.all([watcherRun, created]);
+
+    expect(useGitStore.getState().staged).toEqual([{ path: "made.ts", status: "added" }]);
+  });
+
+  it("re-arms the queued slot for a wave arriving during the trailing run", async () => {
+    // The `queued = null` before re-entering the action is what allows this: a
+    // third wave must be able to queue behind the trailing run rather than join a
+    // slot that was never released, which would drop its read entirely.
+    const gates = [deferred<GitStatus>(), deferred<GitStatus>()];
+    let statusCalls = 0;
+    invokeMock.mockImplementation((command: string) => {
+      if (command === "git_status") {
+        statusCalls += 1;
+        return gates[statusCalls - 1]?.promise ?? Promise.resolve(EMPTY_STATUS);
+      }
+      if (command === "git_branch_state") return Promise.resolve(branchState());
+      if (command === "git_merge_state") return Promise.resolve(mergeState("none"));
+      return Promise.resolve(undefined);
+    });
+
+    const first = useGitStore.getState().refreshAll();
+    const second = useGitStore.getState().refreshAll(); // arms the trailing run
+    expect(statusCalls).toBe(1);
+
+    gates[0].resolve(EMPTY_STATUS);
+    await tick();
+    expect(statusCalls).toBe(2); // the trailing run is now the one in flight
+
+    const third = useGitStore.getState().refreshAll();
+    gates[1].resolve(EMPTY_STATUS);
+    await Promise.all([first, second, third]);
+
+    expect(statusCalls).toBe(3);
+  });
+
+  it("suppresses the queued run when an operation starts mid-cascade", async () => {
+    // The queued run goes back through the action, not straight to the reads, so
+    // the operation guard still applies to it.
+    const reads = gatedReads();
+    const first = useGitStore.getState().refreshAll();
+    const second = useGitStore.getState().refreshAll();
+    expect(reads.statusCalls()).toBe(1);
+
+    useGitStore.setState({ op: { id: "fetch-1", kind: "fetch", progress: "" } });
+    reads.release();
+    await Promise.all([first, second]);
+
+    expect(reads.statusCalls()).toBe(1);
   });
 });
 
