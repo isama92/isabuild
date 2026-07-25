@@ -166,6 +166,40 @@ describe("gitStore.refresh", () => {
     expect(s.error).toMatch(/not inside a git repository/);
   });
 
+  it("discards its answer when the project changed while it was reading", async () => {
+    // The stale write that pinned the panel to the repo the user had just left:
+    // refresh() writes repoRoot, and every later refresh reads it back.
+    const gate = deferred<GitStatus>();
+    invokeMock.mockReturnValueOnce(gate.promise);
+    const pending = useGitStore.getState().refresh();
+
+    // What projectStore.resetForProjectSwitch does.
+    useGitStore.setState((state) => ({
+      ...initialGitState,
+      generation: state.generation + 1,
+    }));
+    gate.resolve({ ...EMPTY_STATUS, repoRoot: "/repos/old" });
+    await pending;
+
+    const s = useGitStore.getState();
+    expect(s.repoRoot).toBeNull();
+    expect(s.phase).toBe("idle");
+  });
+
+  it("discards a failure from a project that has already been left", async () => {
+    // Otherwise the new project's panel shows the old one's error.
+    invokeMock.mockRejectedValueOnce(new Error("'/repos/old' has gone"));
+    const pending = useGitStore.getState().refresh();
+    useGitStore.setState((state) => ({
+      ...initialGitState,
+      generation: state.generation + 1,
+    }));
+    await pending;
+
+    expect(useGitStore.getState().phase).toBe("idle");
+    expect(useGitStore.getState().error).toBeNull();
+  });
+
   it("never leaves the settled phase while a read is in flight (Part 9)", async () => {
     // `phase` is the settled outcome, not a progress flag. A transient value here
     // is what made the Status panel's empty state vanish on every watcher event,
@@ -532,6 +566,30 @@ describe("gitStore.runOp", () => {
 
     await finishCurrentOp({ exitCode: 0, output: "", cancelled: false });
     await pending;
+  });
+
+  it("does not report a failure once the project has been switched", async () => {
+    // A network op outlives a project switch: nothing cancels it, and the user is
+    // free to open another project while a pull runs. Reporting its failure against
+    // the new project would be worse than merely wrong, because OpErrorDialog offers
+    // "Retry in terminal" and that terminal is now rooted in the new project.
+    const pending = useGitStore.getState().runOp({ kind: "pull", remote: "origin" });
+    const op = await startedOp();
+
+    // What projectStore.resetForProjectSwitch does.
+    useGitStore.setState((state) => ({
+      ...initialGitState,
+      generation: state.generation + 1,
+    }));
+    fire(`git://done/${op.id}`, {
+      exitCode: 1,
+      output: "! [rejected] main -> main (non-fast-forward)",
+      cancelled: false,
+    });
+
+    await expect(pending).resolves.toBe(false);
+    expect(useGitStore.getState().opError).toBeNull();
+    expect(useGitStore.getState().notice).toBeNull();
   });
 
   it("ignores a progress line belonging to a different op", async () => {

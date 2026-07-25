@@ -33,6 +33,13 @@ export function useRepoWatch(): void {
       await useGitStore.getState().refreshBranch();
       if (cancelled) return;
 
+      // Merge state too, not only on later events: a project opened while a merge,
+      // rebase, cherry-pick or revert is in progress otherwise shows no banner
+      // until some unrelated file happens to change, and that banner is the only
+      // route to Continue and Abort.
+      await useGitStore.getState().refreshMerge();
+      if (cancelled) return;
+
       // A watch failure is non-fatal — the panel still shows the initial
       // status, it just won't live-update.
       try {

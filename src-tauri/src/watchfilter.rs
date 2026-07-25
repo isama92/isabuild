@@ -58,7 +58,7 @@ use std::collections::{BTreeSet, HashMap, HashSet};
 use std::path::{Component, Path, PathBuf};
 use std::time::SystemTime;
 
-use crate::git;
+use crate::git::{self, basename};
 use crate::SAVE_TEMP_PREFIX;
 
 /// Ceiling on remembered verdicts, past which the lot is discarded.
@@ -604,10 +604,6 @@ fn classify_git_dir(rest: &str) -> Verdict {
         return Verdict::Refresh;
     }
     Verdict::Drop
-}
-
-fn basename(slug: &str) -> &str {
-    slug.rsplit('/').next().unwrap_or(slug)
 }
 
 fn first_component(slug: &str) -> &str {

@@ -2,6 +2,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { render } from "@testing-library/react";
 import { getStatus, onRepoChanged, startWatch, type GitStatus } from "../lib/gitStatus";
 import { getBranchState } from "../lib/gitBranch";
+import { getMergeState } from "../lib/gitMerge";
+import { mergeState } from "../test/factories";
 import { initialGitState, useGitStore } from "../store/gitStore";
 import { useRepoWatch } from "./useRepoWatch";
 
@@ -12,11 +14,19 @@ vi.mock("../lib/gitStatus", () => ({
 }));
 
 vi.mock("../lib/gitBranch", () => ({ getBranchState: vi.fn() }));
+// Partial, following MergeWindow.test.tsx: gitStore imports six other things from
+// this module, and replacing it wholesale would make the next test that calls
+// mergeBranch or concludeOp fail on a missing export rather than an assertion.
+vi.mock("../lib/gitMerge", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../lib/gitMerge")>()),
+  getMergeState: vi.fn(),
+}));
 
 const getStatusMock = vi.mocked(getStatus);
 const startWatchMock = vi.mocked(startWatch);
 const onRepoChangedMock = vi.mocked(onRepoChanged);
 const getBranchStateMock = vi.mocked(getBranchState);
+const getMergeStateMock = vi.mocked(getMergeState);
 
 const BRANCH_STATE = {
   current: "main",
@@ -52,6 +62,7 @@ beforeEach(() => {
   repoChangedCb = undefined;
   getStatusMock.mockResolvedValue({ repoRoot: "/repo", staged: [], unstaged: [], conflicts: [] });
   getBranchStateMock.mockResolvedValue(BRANCH_STATE);
+  getMergeStateMock.mockResolvedValue(mergeState("none"));
   startWatchMock.mockResolvedValue(undefined);
   onRepoChangedMock.mockImplementation((cb: () => void) => {
     repoChangedCb = cb;
@@ -106,6 +117,32 @@ describe("useRepoWatch", () => {
     await flush();
 
     expect(getStatusMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("reads the merge state on mount too", async () => {
+    // A project opened mid-merge otherwise shows no merge banner until an
+    // unrelated file happens to change, and that banner is the only route to
+    // Continue and Abort.
+    getMergeStateMock.mockResolvedValue(mergeState("merge", { mergingRef: "feature" }));
+
+    render(<Harness />);
+    await flush();
+
+    expect(getMergeStateMock).toHaveBeenCalledWith("/repo");
+    expect(useGitStore.getState().mergeState).toMatchObject({ mergingRef: "feature" });
+  });
+
+  it("still arms the watcher when the merge state cannot be read", async () => {
+    // The read is best-effort and swallows its own failure; it must not become a
+    // gate on the subscription, or a transient index.lock would leave the panel
+    // with no live updates at all.
+    getMergeStateMock.mockRejectedValue(new Error("index.lock exists"));
+
+    render(<Harness />);
+    await flush();
+
+    expect(startWatchMock).toHaveBeenCalledWith("/repo");
+    expect(onRepoChangedMock).toHaveBeenCalledTimes(1);
   });
 
   it("reads the branch state on mount, after the root is resolved", async () => {

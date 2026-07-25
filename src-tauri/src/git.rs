@@ -398,10 +398,13 @@ pub fn parse_porcelain_v2(bytes: &[u8]) -> (Vec<FileEntry>, Vec<FileEntry>, Vec<
 /// change to it must still be shown. Porcelain v2 always uses forward slashes,
 /// Windows included, so the basename split is platform-independent.
 fn is_save_temp(path: &str) -> bool {
-    path.rsplit('/')
-        .next()
-        .unwrap_or(path)
-        .starts_with(crate::SAVE_TEMP_PREFIX)
+    basename(path).starts_with(crate::SAVE_TEMP_PREFIX)
+}
+
+/// The last `/`-separated component. Lives here rather than in `watchfilter`, which
+/// also needs it, because the dependency already runs that way round.
+pub(crate) fn basename(slug: &str) -> &str {
+    slug.rsplit('/').next().unwrap_or(slug)
 }
 
 /// Map a `u` record's `<XY>` to a [`ConflictKind`].

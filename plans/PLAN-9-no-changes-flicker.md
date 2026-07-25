@@ -130,6 +130,15 @@ only on the failure path, so the `NotARepo` message stays as it was; and untrack
   is the only place the filter knowingly disagrees with `git status`.
 - **A global `core.excludesFile` edited while the app runs** is not detected: it is outside the watch
   root. The stale window ends at the next `.gitignore` edit or project switch.
+- **An orphaned save-temp file is now invisible.** `NamedTempFile` unlinks on drop, so a process killed
+  mid-save leaves a `.isabuild-save-XXXXXX` behind, and the parser no longer shows it: the user cannot
+  see it in order to delete it. It reappears the moment it is staged, since that makes it a tracked
+  record. Accepted as the smaller of the two harms against a row that flickers on every save.
+- **Mount does one more round trip before the watcher is armed** (three, not two), because the merge
+  read is awaited in front of it. A file changed in that window is missed until the next event.
+  Reordering so the watch is armed straight after the status read, with branch and merge read
+  concurrently, would shrink it to one; deliberately not done here, since it reorders behaviour Part 5
+  and Part 6 rely on for no gain the reported bug cares about.
 - An awaited mutation can now wait up to two cascades, by construction of the freshness contract.
   The only awaited one is the branch delete dialog, which today *competes* with up to three
   concurrent cascades for the same git binary, so it is unlikely to be slower in practice.
