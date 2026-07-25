@@ -3,25 +3,15 @@
   "separate-pull-requests": false,
   "pull-request-title-pattern": "chore: release ${version}",
   "packages": {
-    "src-tauri": {
-      "release-type": "rust",
+    ".": {
+      "release-type": "node",
       "package-name": "isabuild",
-      "changelog-path": "../CHANGELOG.md",
+      "changelog-path": "CHANGELOG.md",
       "extra-files": [
         {
-          "type": "json",
-          "path": "../package.json",
-          "jsonpath": "$.version"
-        },
-        {
-          "type": "json",
-          "path": "../package-lock.json",
-          "jsonpath": "$.version"
-        },
-        {
-          "type": "json",
-          "path": "../package-lock.json",
-          "jsonpath": "$.packages[''].version"
+          "type": "toml",
+          "path": "src-tauri/Cargo.toml",
+          "jsonpath": "$.package.version"
         }
       ]
     }
