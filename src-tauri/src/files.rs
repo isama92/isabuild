@@ -485,14 +485,20 @@ mod repo_tests {
 
     #[test]
     fn a_row_named_like_a_glob_touches_only_itself() {
-        // `*`, `?` and `[...]` are legal filenames and git reports them verbatim,
-        // but a pathspec is a glob — so without GIT_LITERAL_PATHSPECS, rolling
-        // back a row named `[ab]` would run `git clean -f -d -- '[ab]'` and delete
-        // `a` as well, uncommitted edit and all. A row named `*` would take the
-        // whole working tree.
+        // `[...]` is a legal filename and git reports it verbatim, but a pathspec
+        // is a glob — so without GIT_LITERAL_PATHSPECS, rolling back a row named
+        // `[ab]` runs `git clean -f -d -- '[ab]'` and deletes `a` as well,
+        // uncommitted edit and all.
+        //
+        // The brackets carry the test on every OS. `*` and `?` are the worse case
+        // (`*` crosses `/`, so that row would take the whole working tree) but they
+        // are *reserved* characters on Windows, where creating the file fails with
+        // ERROR_INVALID_NAME long before git sees it — so they are asserted only
+        // where such a file can exist.
         let dir = repo_with_commit("a", "committed\n");
         write(dir.path(), "a", "edited\n");
         write(dir.path(), "[ab]", "unrelated\n");
+        #[cfg(unix)]
         write(dir.path(), "*", "also unrelated\n");
 
         rollback(dir.path(), "[ab]", None).expect("rollback");
@@ -503,6 +509,7 @@ mod repo_tests {
             "edited\n",
             "an unrelated file was hit"
         );
+        #[cfg(unix)]
         assert!(dir.path().join("*").exists(), "an unrelated file was hit");
     }
 
