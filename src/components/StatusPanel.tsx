@@ -1,9 +1,20 @@
 import { useState } from "react";
 import { MergeBanner } from "./MergeBanner";
+import { FileContextMenu } from "./FileContextMenu";
+import { CommitFileDialog, RollbackFileDialog } from "./FileDialogs";
 import { useGitStore } from "../store/gitStore";
 import { useLayoutStore } from "../store/layoutStore";
 import { conflictHasMarkers, type ChangeStatus, type ConflictEntry, type FileEntry } from "../lib/gitStatus";
 import { conflictActions, conflictLabel } from "../lib/conflictView";
+import {
+  changeLabel,
+  conflictTooltip,
+  copyValues,
+  entryTooltip,
+  type FileAction,
+  type FileGroup,
+  type FileTarget,
+} from "../lib/fileActions";
 import type { PathResolution } from "../lib/gitMerge";
 import { openDiffWindow } from "../lib/diffWindow";
 import { openMergeWindow } from "../lib/mergeWindow";
@@ -21,6 +32,12 @@ import { openMergeWindow } from "../lib/mergeWindow";
 // route to the merge window instead. The ones with no conflict markers — a file
 // one side deleted, say — have nothing to show in a window, so they carry their
 // whole-file resolutions inline.
+//
+// Right-clicking a row (or pressing Menu / Shift+F10 on it) opens its own menu:
+// commit, rollback, stage or unstage, and the three forms of its path. What the
+// menu offers is decided in `lib/fileActions`; the two irreversible items go
+// through a dialog first, and every git call goes through the store so a failure
+// lands in the same modal as every other mutation.
 
 // Single-letter badge per status: the git letter for tracked changes, "U" for
 // untracked.
@@ -34,19 +51,73 @@ const STATUS_BADGE: Record<ChangeStatus, string> = {
   untracked: "U",
 };
 
-function FileRow({ entry, onOpen }: { entry: FileEntry; onOpen: (entry: FileEntry) => void }) {
-  // Full path (with rename origin) on hover; split so the filename reads first
-  // and the directory is dimmed behind it.
-  const title = entry.origPath ? `${entry.origPath} → ${entry.path}` : entry.path;
+/**
+ * Open a row's context menu from the keyboard.
+ *
+ * The Menu key and Shift+F10 are the two platform conventions, and without them
+ * the whole feature would be mouse-only. Anchored to the row rather than to a
+ * cursor that has not moved.
+ */
+function menuKeyPosition(event: React.KeyboardEvent): { x: number; y: number } | null {
+  const wanted = event.key === "ContextMenu" || (event.key === "F10" && event.shiftKey);
+  if (!wanted) return null;
+  const box = event.currentTarget.getBoundingClientRect();
+  return { x: box.left, y: box.bottom };
+}
+
+/** Everything a row needs to open its own menu, from either input device. */
+interface RowMenuProps {
+  onMenu: (target: FileTarget, at: { x: number; y: number }) => void;
+}
+
+function FileRow({
+  entry,
+  group,
+  onOpen,
+  onMenu,
+}: {
+  entry: FileEntry;
+  group: Extract<FileGroup, "staged" | "unstaged">;
+  onOpen: (entry: FileEntry) => void;
+} & RowMenuProps) {
+  // State and full path (with rename origin) on hover: the badge is one letter
+  // and staged-ness is only implied by which group the row sits in, so neither
+  // is readable without this.
+  const title = entryTooltip(entry, group === "staged");
   const slash = entry.path.lastIndexOf("/");
   const dir = slash >= 0 ? entry.path.slice(0, slash + 1) : "";
   const name = slash >= 0 ? entry.path.slice(slash + 1) : entry.path;
+  const target: FileTarget = {
+    path: entry.path,
+    origPath: entry.origPath,
+    group,
+    status: entry.status,
+  };
   return (
     <li title={title}>
       {/* A button, not a click handler on the li: keyboard focus, Enter/Space
           and the accessible role all come for free. */}
-      <button type="button" className="status-row" onClick={() => onOpen(entry)}>
-        <span className={`status-badge status-badge--${entry.status}`} aria-label={entry.status}>
+      <button
+        type="button"
+        className="status-row"
+        onClick={() => onOpen(entry)}
+        onContextMenu={(event) => {
+          // preventDefault suppresses the webview's own menu, which otherwise
+          // opens on top of ours.
+          event.preventDefault();
+          onMenu(target, { x: event.clientX, y: event.clientY });
+        }}
+        onKeyDown={(event) => {
+          const at = menuKeyPosition(event);
+          if (!at) return;
+          event.preventDefault();
+          onMenu(target, at);
+        }}
+      >
+        <span
+          className={`status-badge status-badge--${entry.status}`}
+          aria-label={changeLabel(entry.status)}
+        >
           {STATUS_BADGE[entry.status]}
         </span>
         <span className="status-path">
@@ -60,13 +131,16 @@ function FileRow({ entry, onOpen }: { entry: FileEntry; onOpen: (entry: FileEntr
 
 function StatusGroup({
   title,
+  group,
   entries,
   onOpen,
+  onMenu,
 }: {
   title: string;
+  group: Extract<FileGroup, "staged" | "unstaged">;
   entries: FileEntry[];
   onOpen: (entry: FileEntry) => void;
-}) {
+} & RowMenuProps) {
   if (entries.length === 0) return null;
   return (
     <section className="status-group">
@@ -76,7 +150,13 @@ function StatusGroup({
       <ul className="status-list">
         {entries.map((entry) => (
           // Within a group each path is unique (one record per path).
-          <FileRow key={`${entry.status}:${entry.path}`} entry={entry} onOpen={onOpen} />
+          <FileRow
+            key={`${entry.status}:${entry.path}`}
+            entry={entry}
+            group={group}
+            onOpen={onOpen}
+            onMenu={onMenu}
+          />
         ))}
       </ul>
     </section>
@@ -87,41 +167,73 @@ function ConflictRow({
   entry,
   onOpen,
   onResolve,
+  onMenu,
 }: {
   entry: ConflictEntry;
   onOpen: (entry: ConflictEntry) => void;
   onResolve: (entry: ConflictEntry, resolution: PathResolution) => void;
-}) {
+} & RowMenuProps) {
   const slash = entry.path.lastIndexOf("/");
   const dir = slash >= 0 ? entry.path.slice(0, slash + 1) : "";
   const name = slash >= 0 ? entry.path.slice(slash + 1) : entry.path;
   const kindLabel = conflictLabel(entry.kind);
   const actions = conflictActions(entry.kind);
   const openable = conflictHasMarkers(entry.kind);
+  // `kind` and no `status`: a conflict has its own vocabulary, and the kind is
+  // what says whether rolling the row back restores the file or deletes it. The
+  // menu it gets is the reduced one (no commit, no staging — see `fileMenuItems`).
+  const target: FileTarget = { path: entry.path, group: "conflicts", kind: entry.kind };
+
+  function openMenu(event: React.MouseEvent) {
+    event.preventDefault();
+    onMenu(target, { x: event.clientX, y: event.clientY });
+  }
+
+  function openMenuFromKeyboard(event: React.KeyboardEvent) {
+    const at = menuKeyPosition(event);
+    if (!at) return;
+    event.preventDefault();
+    onMenu(target, at);
+  }
+
+  const label = (
+    <>
+      <span className="status-badge status-badge--conflict" aria-label={kindLabel}>
+        {"!"}
+      </span>
+      <span className="status-path">
+        {dir && <span className="status-path-dir">{dir}</span>}
+        <span className="status-path-name">{name}</span>
+      </span>
+    </>
+  );
 
   return (
-    <li title={`${entry.path} — ${kindLabel}`}>
+    <li title={conflictTooltip(entry)}>
       {/* A button only when there is something to open. A row that cannot lead
-          anywhere must not look like it can. */}
+          anywhere must not look like it can — but it can still be right-clicked,
+          which is why the menu is wired to both forms. */}
       {openable ? (
-        <button type="button" className="status-row" onClick={() => onOpen(entry)}>
-          <span className="status-badge status-badge--conflict" aria-label={entry.kind}>
-            {"!"}
-          </span>
-          <span className="status-path">
-            {dir && <span className="status-path-dir">{dir}</span>}
-            <span className="status-path-name">{name}</span>
-          </span>
+        <button
+          type="button"
+          className="status-row"
+          onClick={() => onOpen(entry)}
+          onContextMenu={openMenu}
+          onKeyDown={openMenuFromKeyboard}
+        >
+          {label}
         </button>
       ) : (
-        <div className="status-row status-row--static">
-          <span className="status-badge status-badge--conflict" aria-label={entry.kind}>
-            {"!"}
-          </span>
-          <span className="status-path">
-            {dir && <span className="status-path-dir">{dir}</span>}
-            <span className="status-path-name">{name}</span>
-          </span>
+        // Focusable despite having nothing to open, so the Menu key can reach its
+        // context menu: the alternative is a row whose only actions are
+        // mouse-only. Not a button, because there is still nothing to activate.
+        <div
+          className="status-row status-row--static"
+          tabIndex={0}
+          onContextMenu={openMenu}
+          onKeyDown={openMenuFromKeyboard}
+        >
+          {label}
         </div>
       )}
       {actions.length > 0 && (
@@ -152,11 +264,12 @@ function ConflictGroup({
   entries,
   onOpen,
   onResolve,
+  onMenu,
 }: {
   entries: ConflictEntry[];
   onOpen: (entry: ConflictEntry) => void;
   onResolve: (entry: ConflictEntry, resolution: PathResolution) => void;
-}) {
+} & RowMenuProps) {
   if (entries.length === 0) return null;
   return (
     <section className="status-group status-group--conflicts">
@@ -165,7 +278,13 @@ function ConflictGroup({
       </h3>
       <ul className="status-list">
         {entries.map((entry) => (
-          <ConflictRow key={entry.path} entry={entry} onOpen={onOpen} onResolve={onResolve} />
+          <ConflictRow
+            key={entry.path}
+            entry={entry}
+            onOpen={onOpen}
+            onResolve={onResolve}
+            onMenu={onMenu}
+          />
         ))}
       </ul>
     </section>
@@ -180,7 +299,12 @@ export function StatusPanel() {
   const staged = useGitStore((state) => state.staged);
   const unstaged = useGitStore((state) => state.unstaged);
   const conflicts = useGitStore((state) => state.conflicts);
+  const mergeKind = useGitStore((state) => state.mergeState?.kind ?? "none");
   const [openError, setOpenError] = useState<string | null>(null);
+  const [menu, setMenu] = useState<{ target: FileTarget; x: number; y: number } | null>(null);
+  const [dialog, setDialog] = useState<{ kind: "commit" | "rollback"; target: FileTarget } | null>(
+    null,
+  );
 
   const isEmpty = staged.length === 0 && unstaged.length === 0 && conflicts.length === 0;
 
@@ -217,6 +341,68 @@ export function StatusPanel() {
   }
 
   /**
+   * A menu item was chosen.
+   *
+   * The two destructive-or-irreversible actions open a dialog; the rest run
+   * straight away. Every git call goes through the store, so a failure reaches
+   * the same `opError` modal with git's own words and "Retry in terminal" as
+   * every other mutation in the app.
+   */
+  function runAction(action: FileAction, target: FileTarget) {
+    const git = useGitStore.getState();
+    switch (action) {
+      case "commit":
+      case "rollback":
+        setDialog({ kind: action, target });
+        return;
+      case "stage":
+        void git.stageFile(target);
+        return;
+      case "unstage":
+        void git.unstageFile(target);
+        return;
+      case "copyRelative":
+      case "copyAbsolute":
+      case "copyName":
+        void copyPath(action, target);
+        return;
+    }
+  }
+
+  async function copyPath(action: FileAction, target: FileTarget) {
+    // repoRoot only matters for the absolute form; the other two are derivable
+    // without it, so a missing root does not have to block them.
+    const values = copyValues(repoRoot ?? "", target.path);
+    const text =
+      action === "copyAbsolute"
+        ? values.absolute
+        : action === "copyName"
+          ? values.name
+          : values.relative;
+    try {
+      await navigator.clipboard.writeText(text);
+    } catch {
+      // No clipboard permission, or no clipboard: say so rather than leaving the
+      // user believing a path they will later paste is on it. Same route as a
+      // failed diff-window open, since neither is a git failure.
+      setOpenError(`Could not copy ${text} to the clipboard.`);
+    }
+  }
+
+  /** Whether this path is in both groups, i.e. staged and then changed again. */
+  function isAlsoModified(target: FileTarget): boolean {
+    return (
+      staged.some((entry) => entry.path === target.path) &&
+      unstaged.some((entry) => entry.path === target.path)
+    );
+  }
+
+  function onMenu(target: FileTarget, at: { x: number; y: number }) {
+    setOpenError(null);
+    setMenu({ target, ...at });
+  }
+
+  /**
    * The render table, in priority order. `phase` is the *settled* state, so none
    * of these arms can be reached by a read in flight: a refresh leaves the phase
    * and the lists it found alone, and the previous result stays on screen until
@@ -248,9 +434,26 @@ export function StatusPanel() {
     return (
       <>
         {/* Conflicts first: nothing else can be committed until they are gone. */}
-        <ConflictGroup entries={conflicts} onOpen={openConflict} onResolve={resolveConflict} />
-        <StatusGroup title="Staged Changes" entries={staged} onOpen={openDiff} />
-        <StatusGroup title="Changes" entries={unstaged} onOpen={openDiff} />
+        <ConflictGroup
+          entries={conflicts}
+          onOpen={openConflict}
+          onResolve={resolveConflict}
+          onMenu={onMenu}
+        />
+        <StatusGroup
+          title="Staged Changes"
+          group="staged"
+          entries={staged}
+          onOpen={openDiff}
+          onMenu={onMenu}
+        />
+        <StatusGroup
+          title="Changes"
+          group="unstaged"
+          entries={unstaged}
+          onOpen={openDiff}
+          onMenu={onMenu}
+        />
       </>
     );
   }
@@ -283,6 +486,40 @@ export function StatusPanel() {
         )}
         {changesBody()}
       </div>
+      {menu !== null && (
+        <FileContextMenu
+          target={menu.target}
+          x={menu.x}
+          y={menu.y}
+          // Not just a merge: git refuses a pathspec commit during a rebase,
+          // cherry-pick or revert too, and `kind` names all of them.
+          operationInProgress={mergeKind !== "none" && mergeKind !== "conflictsOnly"}
+          onAction={runAction}
+          onClose={() => setMenu(null)}
+        />
+      )}
+      {dialog?.kind === "commit" && (
+        <CommitFileDialog
+          target={dialog.target}
+          alsoModified={isAlsoModified(dialog.target)}
+          onCommit={(message) => {
+            setDialog(null);
+            void useGitStore.getState().commitFile(dialog.target, message);
+          }}
+          onClose={() => setDialog(null)}
+        />
+      )}
+      {dialog?.kind === "rollback" && (
+        <RollbackFileDialog
+          target={dialog.target}
+          onRollback={() => {
+            setDialog(null);
+            void useGitStore.getState().rollbackFile(dialog.target);
+          }}
+          onClose={() => setDialog(null)}
+        />
+      )}
     </>
   );
 }
+

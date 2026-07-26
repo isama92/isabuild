@@ -23,6 +23,16 @@
 
 import { create } from "zustand";
 import { getStatus, type ConflictEntry, type FileEntry } from "../lib/gitStatus";
+import { rollbackDeletes, type FileTarget } from "../lib/fileActions";
+import {
+  commitPath as invokeCommitPath,
+  rollbackPath as invokeRollbackPath,
+  shellPath,
+  singleQuote,
+  stagePath as invokeStagePath,
+  unstagePath as invokeUnstagePath,
+  type FilePath,
+} from "../lib/gitFiles";
 import {
   getMergeState,
   mergeRef,
@@ -67,6 +77,7 @@ import {
  * fixed.
  */
 export type GitStatusPhase = "idle" | "ready" | "error";
+
 
 /** A network operation in flight. */
 export interface RunningOp {
@@ -164,6 +175,19 @@ export interface GitState {
   /** Resolve a whole conflicted path (the kinds with no markers). */
   resolveConflictPath: (path: string, resolution: PathResolution) => Promise<boolean>;
 
+  /**
+   * The status panel's per-file actions. Each targets one row — its path plus
+   * git's rename/copy origin, which has to travel with it (see `FileRow`).
+   *
+   * `rollbackFile` destroys uncommitted work and cannot be undone, so the caller
+   * confirms first; the store does not ask.
+   */
+  stageFile: (target: FileTarget) => Promise<boolean>;
+  unstageFile: (target: FileTarget) => Promise<boolean>;
+  rollbackFile: (target: FileTarget) => Promise<boolean>;
+  /** Commit this path alone. Resolves true when the commit landed. */
+  commitFile: (target: FileTarget, message: string) => Promise<boolean>;
+
   /** Start a network op. Resolves true when it exited zero. */
   runOp: (spec: RemoteOpSpec) => Promise<boolean>;
   cancelOp: () => Promise<void>;
@@ -189,6 +213,28 @@ export const initialGitState = {
 
 function messageOf(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+/**
+ * The IPC fields of a row target, with the open repo root attached. The row's
+ * `status`/`kind`/`group` stay here: they decide the wording and the retry
+ * command, and the backend re-derives everything it needs from git itself.
+ *
+ * `""` when no root is resolved yet, matching the other actions: the backend
+ * rejects it with a real message, and it is unreachable anyway — the panel has no
+ * rows to right-click before the first successful status read.
+ */
+function rooted(repoRoot: string | null, target: FileTarget): FilePath {
+  return { repoRoot: repoRoot ?? "", path: target.path, origPath: target.origPath };
+}
+
+/**
+ * The pathspecs of a row for the "Retry in terminal" command line: the path,
+ * plus the rename/copy origin, because a rename is one row and two paths.
+ */
+function pathArgs(target: FileTarget): string {
+  const paths = target.origPath ? [target.path, target.origPath] : [target.path];
+  return paths.map(shellPath).join(" ");
 }
 
 export const useGitStore = create<GitState>((set, get) => {
@@ -462,6 +508,53 @@ export const useGitStore = create<GitState>((set, get) => {
       mutate(`Could not resolve ${path}`, () =>
         invokeResolvePath(get().repoRoot ?? "", path, resolution),
       ),
+
+    stageFile: (target) =>
+      mutate(
+        `Could not stage ${target.path}`,
+        () => invokeStagePath(rooted(get().repoRoot, target)),
+        `git add -- ${pathArgs(target)}`,
+      ),
+
+    unstageFile: (target) =>
+      mutate(
+        `Could not unstage ${target.path}`,
+        () => invokeUnstagePath(rooted(get().repoRoot, target)),
+        // The command shown, not the one run: the backend switches to
+        // `git rm --cached` in a repository with no commits, where there is no
+        // HEAD for `reset` to resolve. Retrying the reset form there would fail,
+        // but so would the state that produced it — see `files::unstage`.
+        `git reset HEAD -- ${pathArgs(target)}`,
+      ),
+
+    rollbackFile: (target) =>
+      mutate(
+        `Could not roll back ${target.path}`,
+        () => invokeRollbackPath(rooted(get().repoRoot, target)),
+        // Two shapes, because the backend really does run two: a path HEAD has is
+        // checked out, and one it does not have is unstaged and deleted. Offering
+        // the checkout for a file that was never committed would hand the user a
+        // command that fails differently from the one that just did.
+        rollbackDeletes(target)
+          ? `git clean -f -d -- ${pathArgs(target)}`
+          : `git checkout HEAD -- ${pathArgs(target)}`,
+      ),
+
+    commitFile: async (target, message) => {
+      let sha: string | null = null;
+      const ok = await mutate(
+        `Could not commit ${target.path}`,
+        async () => {
+          sha = (await invokeCommitPath(rooted(get().repoRoot, target), message)).sha;
+        },
+        `git commit -m ${singleQuote(message)} -- ${pathArgs(target)}`,
+      );
+      // Only on success, and only through `mutate`'s return: it is false for a
+      // commit whose repo the user has since closed, and a notice about a project
+      // that is no longer open would outlive everything else about it.
+      if (ok) set({ notice: sha ? `Committed ${sha}` : "Committed" });
+      return ok;
+    },
 
     runOp: async (spec) => {
       if (get().op) return false; // the backend refuses this too; don't even ask
