@@ -31,7 +31,7 @@ npm run lint                                       # eslint + tsc --noEmit
 
 ## Workflow
 
-- Work in small steps; the roadmap in README.md is the backlog (tick items off when done). Each part has a detailed plan in `plans/`; follow its acceptance criteria. When a requirement is ambiguous or a decision shapes UX or architecture, ask before building.
+- Work in small steps; the roadmap in README.md is the backlog (tick items off when done) **and the only planning document**. A part's rationale, scope and acceptance criteria live in its own roadmap entry — write and refine them there. Do **not** create plan files or a `plans/` directory; detailed planning happens in conversation, and whatever is durable goes into the entry. When a requirement is ambiguous or a decision shapes UX or architecture, ask before building.
 - Every feature ships with tests in the same step: Rust backend logic gets `cargo test` cases (unit-test the parsers — git status/branch output, chunk models — against fixture strings; PTY code gets integration tests where feasible), frontend components/pages get `vitest` cases, covering the negative paths too. Both suites must be green before you commit.
 - Before committing a completed step, run a read-only review subagent over the uncommitted changes (`git status` / `git diff` / `git diff --staged`). Brief it explicitly (it has none of this conversation's context): what the feature does, its acceptance criteria, and to follow this CLAUDE.md. It reports only, never edits. Then triage: fix real issues, skip false positives, note your calls. Re-run the suites if a fix touched code, then commit. (The `ship` skill runs this flow.)
 - Commit per completed step with a descriptive message; the pre-commit hook must pass.
