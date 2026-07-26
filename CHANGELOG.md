@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.2.0](https://github.com/isama92/isabuild/compare/v0.1.0...v0.2.0) (2026-07-26)
+
+
+### Features
+
+* file actions in the status panel, richer tooltips, Shift+Enter ([#13](https://github.com/isama92/isabuild/issues/13)) ([0755526](https://github.com/isama92/isabuild/commit/0755526d70654116891e502d3570e5cf0daac3f6))
+
 ## 0.1.0 (2026-07-25)
 
 
