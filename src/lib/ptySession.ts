@@ -89,6 +89,22 @@ interface Entry {
 
 const RESIZE_DEBOUNCE_MS = 100; // ConPTY glitches on rapid resize storms
 
+/**
+ * What Shift+Enter sends instead of a bare CR: meta+Return.
+ *
+ * xterm encodes Shift+Enter as `\r`, indistinguishable from Enter, so without
+ * this the key submits the prompt rather than extending it. `\x1b\r` is the
+ * sequence iTerm2 and VS Code bind for Shift+Enter — and what Claude Code's own
+ * `/terminal-setup` writes — so Claude Code reads it as meta+Return and inserts
+ * a newline.
+ *
+ * Sent in the shell terminal too, deliberately. No byte sequence inserts a
+ * newline at a bash or zsh prompt (LF *is* accept-line there), and `\x1b\r` is
+ * unbound in readline, so Shift+Enter becomes a no-op in the shell rather than
+ * submitting a line the user did not mean to run.
+ */
+export const SHIFT_ENTER = "\x1b\r";
+
 const entries = new Map<string, Entry>();
 
 function createEntry(): Entry {
@@ -229,6 +245,24 @@ async function initialize(
     void invoke("pty_write", { id: opts.id, data: stringToBase64(data) });
   });
 
+  // Shift+Enter, which xterm would otherwise encode as a plain CR. Registered
+  // here rather than at Terminal construction because it needs the session id,
+  // and it is a setter, so a re-attach simply replaces it.
+  //
+  // A user who binds Shift+Enter to an app action in config.json shadows this:
+  // useGlobalKeybindings listens in the capture phase precisely so a bound key
+  // never reaches xterm.
+  e.term.attachCustomKeyEventHandler((event) => {
+    if (event.type !== "keydown" || event.key !== "Enter") return true;
+    if (!event.shiftKey || event.ctrlKey || event.altKey || event.metaKey) return true;
+    // preventDefault as well as returning false: xterm returns early on a false
+    // handler, before its own preventDefault, which would leave the browser
+    // inserting a newline into the hidden textarea xterm manages.
+    event.preventDefault();
+    void invoke("pty_write", { id: opts.id, data: stringToBase64(SHIFT_ENTER) });
+    return false;
+  });
+
   const observer = new ResizeObserver(() => {
     if (e.resizeTimer !== null) {
       window.clearTimeout(e.resizeTimer);
@@ -268,6 +302,10 @@ function teardown(e: Entry): void {
   }
   e.dataDisposable?.dispose();
   e.dataDisposable = null;
+  // Symmetric with disposing the data handler: a detached terminal must not be
+  // able to write to the PTY either. There is no disposable for this one, so
+  // restoring the default handler is how it is unhooked.
+  e.term.attachCustomKeyEventHandler(() => true);
   e.resizeObserver?.disconnect();
   e.resizeObserver = null;
   if (e.resizeTimer !== null) {

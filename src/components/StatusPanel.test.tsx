@@ -109,14 +109,52 @@ describe("StatusPanel", () => {
     expect(screen.getByText("Changes")).toBeInTheDocument();
   });
 
-  it("shows the rename origin in the row tooltip", () => {
+  it("shows the state and the rename origin in the row tooltip", () => {
     useGitStore.setState({
       phase: "ready",
       staged: [{ path: "new.ts", origPath: "old.ts", status: "renamed" }],
       unstaged: [],
     });
     render(<StatusPanel />);
-    expect(screen.getByText("new.ts").closest("li")).toHaveAttribute("title", "old.ts → new.ts");
+    expect(screen.getByText("new.ts").closest("li")).toHaveAttribute(
+      "title",
+      "staged renamed: old.ts → new.ts",
+    );
+  });
+
+  it("says which state each row is in, staged or not", () => {
+    useGitStore.setState({
+      phase: "ready",
+      staged: [{ path: "app/Models/Flight.php", status: "modified" }],
+      unstaged: [
+        { path: "app/Models/User.php", status: "deleted" },
+        { path: "note.txt", status: "untracked" },
+      ],
+    });
+    render(<StatusPanel />);
+
+    expect(screen.getByText("Flight.php").closest("li")).toHaveAttribute(
+      "title",
+      "staged modified: app/Models/Flight.php",
+    );
+    expect(screen.getByText("User.php").closest("li")).toHaveAttribute(
+      "title",
+      "deleted: app/Models/User.php",
+    );
+    expect(screen.getByText("note.txt").closest("li")).toHaveAttribute(
+      "title",
+      "untracked: note.txt",
+    );
+  });
+
+  it("gives the badge a readable label rather than the enum word", () => {
+    useGitStore.setState({
+      phase: "ready",
+      unstaged: [{ path: "link", status: "typeChanged" }],
+    });
+    render(<StatusPanel />);
+    // "typeChanged" is what a screen reader used to read out.
+    expect(screen.getByLabelText("type changed")).toBeInTheDocument();
   });
 
   it("opens the diff window for the clicked file", () => {
@@ -366,5 +404,284 @@ describe("StatusPanel conflicts (Part 6)", () => {
     withConflicts("bothModified");
     useGitStore.setState({ branch: null });
     expect(screen.getByLabelText("Merge in progress")).toBeInTheDocument();
+  });
+
+  it("says which kind of conflict a row is in its tooltip", () => {
+    withConflicts("deletedByThem", "gone.ts");
+    expect(screen.getByText("gone.ts").closest("li")).toHaveAttribute(
+      "title",
+      "conflict (they deleted it, you changed it): gone.ts",
+    );
+  });
+});
+
+describe("StatusPanel context menu", () => {
+  const writeText = vi.fn();
+
+  function withRows(overrides: Partial<typeof initialGitState> = {}) {
+    useGitStore.setState({
+      phase: "ready",
+      repoRoot: "/repo",
+      staged: [{ path: "src/staged.ts", status: "modified" }],
+      unstaged: [{ path: "src/app.ts", status: "modified" }],
+      ...overrides,
+    });
+    render(<StatusPanel />);
+  }
+
+  /** Right-click a row by its file name. */
+  function rightClick(name: string) {
+    fireEvent.contextMenu(screen.getByText(name));
+  }
+
+  beforeEach(() => {
+    writeText.mockReset().mockResolvedValue(undefined);
+    Object.defineProperty(navigator, "clipboard", {
+      value: { writeText },
+      configurable: true,
+    });
+  });
+
+  it("opens on right-click with the items for an unstaged row", () => {
+    withRows();
+    rightClick("app.ts");
+
+    expect(screen.getByRole("menu")).toBeInTheDocument();
+    expect(screen.getByRole("menuitem", { name: "Commit…" })).toBeEnabled();
+    expect(screen.getByRole("menuitem", { name: "Rollback…" })).toBeInTheDocument();
+    expect(screen.getByRole("menuitem", { name: "Add (stage)" })).toBeInTheDocument();
+    expect(screen.queryByRole("menuitem", { name: "Unstage" })).not.toBeInTheDocument();
+  });
+
+  it("offers Unstage instead of Add on a staged row", () => {
+    withRows();
+    rightClick("staged.ts");
+
+    expect(screen.getByRole("menuitem", { name: "Unstage" })).toBeInTheDocument();
+    expect(screen.queryByRole("menuitem", { name: "Add (stage)" })).not.toBeInTheDocument();
+  });
+
+  it("opens from the keyboard, for a user with no mouse", () => {
+    withRows();
+    const row = screen.getByRole("button", { name: /app\.ts/ });
+
+    fireEvent.keyDown(row, { key: "ContextMenu" });
+    expect(screen.getByRole("menu")).toBeInTheDocument();
+
+    fireEvent.keyDown(screen.getByRole("menu"), { key: "Escape" });
+    expect(screen.queryByRole("menu")).not.toBeInTheDocument();
+
+    // The other platform convention.
+    fireEvent.keyDown(row, { key: "F10", shiftKey: true });
+    expect(screen.getByRole("menu")).toBeInTheDocument();
+  });
+
+  it("closes on a click outside", () => {
+    withRows();
+    rightClick("app.ts");
+
+    // Mousedown, not click: a drag starting outside must not leave it open.
+    fireEvent.mouseDown(document.body);
+    expect(screen.queryByRole("menu")).not.toBeInTheDocument();
+  });
+
+  it("stages through the store and closes", () => {
+    const stageFile = vi.fn().mockResolvedValue(true);
+    useGitStore.setState({ stageFile });
+    withRows();
+    rightClick("app.ts");
+
+    fireEvent.click(screen.getByRole("menuitem", { name: "Add (stage)" }));
+
+    expect(stageFile).toHaveBeenCalledWith({
+      path: "src/app.ts",
+      origPath: undefined,
+      group: "unstaged",
+      status: "modified",
+    });
+    expect(screen.queryByRole("menu")).not.toBeInTheDocument();
+  });
+
+  it("unstages through the store, carrying the rename origin", () => {
+    const unstageFile = vi.fn().mockResolvedValue(true);
+    useGitStore.setState({ unstageFile });
+    withRows({ staged: [{ path: "new.ts", origPath: "old.ts", status: "renamed" }] });
+    rightClick("new.ts");
+
+    fireEvent.click(screen.getByRole("menuitem", { name: "Unstage" }));
+
+    expect(unstageFile).toHaveBeenCalledWith({
+      path: "new.ts",
+      origPath: "old.ts",
+      group: "staged",
+      status: "renamed",
+    });
+  });
+
+  it("copies each form of the path", async () => {
+    withRows();
+
+    for (const [item, expected] of [
+      ["Relative path", "src/app.ts"],
+      ["Absolute path", "/repo/src/app.ts"],
+      ["File name", "app.ts"],
+    ]) {
+      rightClick("app.ts");
+      fireEvent.click(screen.getByRole("menuitem", { name: "Copy path" }));
+      fireEvent.click(screen.getByRole("menuitem", { name: item }));
+      await waitFor(() => expect(writeText).toHaveBeenLastCalledWith(expected));
+    }
+  });
+
+  it("says so when the clipboard refuses, rather than pretending it copied", async () => {
+    writeText.mockRejectedValue(new Error("denied"));
+    withRows();
+    rightClick("app.ts");
+
+    fireEvent.click(screen.getByRole("menuitem", { name: "Copy path" }));
+    fireEvent.click(screen.getByRole("menuitem", { name: "Relative path" }));
+
+    await waitFor(() =>
+      expect(screen.getByRole("alert")).toHaveTextContent(/could not copy src\/app\.ts/i),
+    );
+  });
+
+  it("confirms a rollback before running it, and says what it will do", () => {
+    const rollbackFile = vi.fn().mockResolvedValue(true);
+    useGitStore.setState({ rollbackFile });
+    withRows();
+    rightClick("app.ts");
+
+    fireEvent.click(screen.getByRole("menuitem", { name: "Rollback…" }));
+    expect(rollbackFile).not.toHaveBeenCalled();
+    expect(screen.getByRole("dialog")).toHaveTextContent(/restore it from your current commit/i);
+
+    fireEvent.click(screen.getByRole("button", { name: "Roll back" }));
+    expect(rollbackFile).toHaveBeenCalledWith({
+      path: "src/app.ts",
+      origPath: undefined,
+      group: "unstaged",
+      status: "modified",
+    });
+  });
+
+  it("does not roll back when the confirmation is cancelled", () => {
+    const rollbackFile = vi.fn().mockResolvedValue(true);
+    useGitStore.setState({ rollbackFile });
+    withRows();
+    rightClick("app.ts");
+
+    fireEvent.click(screen.getByRole("menuitem", { name: "Rollback…" }));
+    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+
+    expect(rollbackFile).not.toHaveBeenCalled();
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+  });
+
+  it("offers to delete rather than restore an untracked file", () => {
+    withRows({ unstaged: [{ path: "notes.md", status: "untracked" }] });
+    rightClick("notes.md");
+
+    fireEvent.click(screen.getByRole("menuitem", { name: "Rollback…" }));
+
+    // Nothing in git to restore it from, so the words and the button both change.
+    expect(screen.getByRole("dialog")).toHaveTextContent(/not in git/i);
+    expect(screen.getByRole("button", { name: "Delete" })).toBeInTheDocument();
+  });
+
+  it("commits a path with the message from the dialog", () => {
+    const commitFile = vi.fn().mockResolvedValue(true);
+    useGitStore.setState({ commitFile });
+    withRows();
+    rightClick("app.ts");
+
+    fireEvent.click(screen.getByRole("menuitem", { name: "Commit…" }));
+    // Blank until something is typed: git would reject it anyway.
+    expect(screen.getByRole("button", { name: "Commit" })).toBeDisabled();
+
+    fireEvent.change(screen.getByLabelText("Message"), { target: { value: "  fix the thing  " } });
+    fireEvent.click(screen.getByRole("button", { name: "Commit" }));
+
+    expect(commitFile).toHaveBeenCalledWith(
+      { path: "src/app.ts", origPath: undefined, group: "unstaged", status: "modified" },
+      "fix the thing",
+    );
+  });
+
+  it("warns that a re-modified file commits the working-tree version", () => {
+    // git commit -- <path> bypasses the index, so the staged version is not what
+    // lands. Only worth saying when the path really is in both groups.
+    withRows({
+      staged: [{ path: "src/app.ts", status: "modified" }],
+      unstaged: [{ path: "src/app.ts", status: "modified" }],
+    });
+    // git reports such a file twice, so the panel shows it in both groups.
+    const rows = screen.getAllByText("app.ts");
+    expect(rows).toHaveLength(2);
+    fireEvent.contextMenu(rows[0]);
+
+    fireEvent.click(screen.getByRole("menuitem", { name: "Commit…" }));
+    expect(screen.getByRole("status")).toHaveTextContent(/not the one you staged/i);
+  });
+
+  it("does not warn when the file is only staged", () => {
+    withRows();
+    rightClick("staged.ts");
+
+    fireEvent.click(screen.getByRole("menuitem", { name: "Commit…" }));
+    expect(screen.queryByRole("status")).not.toBeInTheDocument();
+  });
+
+  it("disables Commit while a rebase is in progress", () => {
+    // git refuses a pathspec commit mid-operation; the item says why.
+    withRows({ mergeState: mergeState("rebase", { mergingRef: "feature" }) });
+    rightClick("app.ts");
+
+    const commit = screen.getByRole("menuitem", { name: "Commit…" });
+    expect(commit).toBeDisabled();
+    expect(commit).toHaveAttribute("title", expect.stringMatching(/operation is in progress/i));
+  });
+
+  it("leaves Commit usable when only conflicted paths remain, with no operation", () => {
+    // A stash that would not reapply leaves conflicts behind with nothing in
+    // progress, so there is no git restriction to honour.
+    withRows({ mergeState: mergeState("conflictsOnly") });
+    rightClick("app.ts");
+
+    expect(screen.getByRole("menuitem", { name: "Commit…" })).toBeEnabled();
+  });
+
+  it("offers a conflicted row only rollback and the copy forms", () => {
+    withRows({
+      staged: [],
+      unstaged: [],
+      conflicts: [{ path: "file.txt", kind: "bothModified" }],
+      mergeState: mergeState("merge", { mergingRef: "feature" }),
+    });
+    rightClick("file.txt");
+
+    expect(screen.getByRole("menuitem", { name: "Rollback…" })).toBeInTheDocument();
+    expect(screen.getByRole("menuitem", { name: "Copy path" })).toBeInTheDocument();
+    expect(screen.queryByRole("menuitem", { name: "Commit…" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("menuitem", { name: "Add (stage)" })).not.toBeInTheDocument();
+  });
+
+  it("opens the menu on a conflict row that has no window to open", () => {
+    // The row is a div rather than a button for that reason; the menu still works.
+    withRows({
+      staged: [],
+      unstaged: [],
+      conflicts: [{ path: "gone.ts", kind: "deletedByThem" }],
+      mergeState: mergeState("merge", { mergingRef: "feature" }),
+    });
+    rightClick("gone.ts");
+
+    expect(screen.getByRole("menuitem", { name: "Rollback…" })).toBeInTheDocument();
+  });
+
+  it("does not open the diff window when a row is right-clicked", () => {
+    withRows();
+    rightClick("app.ts");
+    expect(openDiffWindowMock).not.toHaveBeenCalled();
   });
 });

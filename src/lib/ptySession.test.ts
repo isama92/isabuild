@@ -1,9 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { invoke } from "@tauri-apps/api/core";
-import { attach, restart } from "./ptySession";
+import { attach, restart, SHIFT_ENTER } from "./ptySession";
 import { publishAppearance, resetAppearance } from "./appearance";
 import { DEFAULT_THEME, themeById } from "../theme/themes";
-import { bytesToBase64 } from "./base64";
+import { bytesToBase64, stringToBase64 } from "./base64";
 
 const hoisted = vi.hoisted(() => {
   class FakeTerminal {
@@ -18,6 +18,7 @@ const hoisted = vi.hoisted(() => {
     focus = vi.fn();
     loadAddon = vi.fn();
     dataHandler: ((data: string) => void) | null = null;
+    keyHandler: ((event: KeyboardEvent) => boolean) | null = null;
     disposeSpy = vi.fn();
 
     constructor(options: Record<string, unknown> = {}) {
@@ -35,6 +36,11 @@ const hoisted = vi.hoisted(() => {
     onData(handler: (data: string) => void) {
       this.dataHandler = handler;
       return { dispose: this.disposeSpy };
+    }
+
+    // A setter in real xterm too, with no disposable: the last handler wins.
+    attachCustomKeyEventHandler(handler: (event: KeyboardEvent) => boolean) {
+      this.keyHandler = handler;
     }
   }
   // Instances created by the mocked Terminal constructor, in creation order.
@@ -87,6 +93,20 @@ const flush = async () => {
   await new Promise((resolve) => setTimeout(resolve, 0));
   await new Promise((resolve) => setTimeout(resolve, 0));
 };
+
+/** A keydown xterm would hand to the custom key handler. */
+function keyDown(key: string, modifiers: Partial<KeyboardEvent> = {}) {
+  return {
+    type: "keydown",
+    key,
+    shiftKey: false,
+    ctrlKey: false,
+    altKey: false,
+    metaKey: false,
+    preventDefault: vi.fn(),
+    ...modifiers,
+  } as unknown as KeyboardEvent & { preventDefault: ReturnType<typeof vi.fn> };
+}
 
 // Session ids must be unique per test: the manager keeps module-level state.
 let testId = 0;
@@ -175,7 +195,81 @@ describe("attach", () => {
 
     const writes = callsTo("pty_write");
     expect(writes).toHaveLength(1);
-    expect(writes[0][1]).toMatchObject({ id });
+    expect(writes[0][1]).toMatchObject({ id, data: stringToBase64("ls\r") });
+  });
+
+  it("sends meta+Return for Shift+Enter, not the bare CR xterm would encode", async () => {
+    mockBackend();
+    const id = nextId();
+    attach(container, { id });
+    await flush();
+
+    const event = keyDown("Enter", { shiftKey: true });
+    const handled = hoisted.terminals.at(-1)!.keyHandler!(event);
+    await flush();
+
+    // False so xterm does not also send its own `\r`, and preventDefault so the
+    // browser does not put a newline in xterm's hidden textarea.
+    expect(handled).toBe(false);
+    expect(event.preventDefault).toHaveBeenCalled();
+    const writes = callsTo("pty_write");
+    expect(writes).toHaveLength(1);
+    expect(writes[0][1]).toMatchObject({ id, data: stringToBase64(SHIFT_ENTER) });
+  });
+
+  it("leaves plain Enter to xterm, so it still submits", async () => {
+    mockBackend();
+    attach(container, { id: nextId() });
+    await flush();
+
+    const event = keyDown("Enter");
+    expect(hoisted.terminals.at(-1)!.keyHandler!(event)).toBe(true);
+    await flush();
+
+    expect(event.preventDefault).not.toHaveBeenCalled();
+    expect(callsTo("pty_write")).toHaveLength(0);
+  });
+
+  it("leaves Enter with a further modifier to xterm", async () => {
+    mockBackend();
+    attach(container, { id: nextId() });
+    await flush();
+
+    const term = hoisted.terminals.at(-1)!;
+    // Ctrl+Shift+Enter and Alt+Shift+Enter mean other things in other programs;
+    // only bare Shift+Enter is ours.
+    expect(term.keyHandler!(keyDown("Enter", { shiftKey: true, ctrlKey: true }))).toBe(true);
+    expect(term.keyHandler!(keyDown("Enter", { shiftKey: true, altKey: true }))).toBe(true);
+    expect(term.keyHandler!(keyDown("Enter", { shiftKey: true, metaKey: true }))).toBe(true);
+    await flush();
+
+    expect(callsTo("pty_write")).toHaveLength(0);
+  });
+
+  it("acts on keydown only, not the matching keyup", async () => {
+    mockBackend();
+    attach(container, { id: nextId() });
+    await flush();
+
+    const event = keyDown("Enter", { shiftKey: true, type: "keyup" } as Partial<KeyboardEvent>);
+    expect(hoisted.terminals.at(-1)!.keyHandler!(event)).toBe(true);
+    await flush();
+
+    // Otherwise every Shift+Enter would write twice.
+    expect(callsTo("pty_write")).toHaveLength(0);
+  });
+
+  it("stops writing to the pty once detached", async () => {
+    mockBackend();
+    const handle = attach(container, { id: nextId() });
+    await flush();
+    handle.detach();
+
+    const event = keyDown("Enter", { shiftKey: true });
+    expect(hoisted.terminals.at(-1)!.keyHandler!(event)).toBe(true);
+    await flush();
+
+    expect(callsTo("pty_write")).toHaveLength(0);
   });
 
   it("rolls back partial wiring when the exit listener registration fails", async () => {

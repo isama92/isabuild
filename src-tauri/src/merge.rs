@@ -30,7 +30,10 @@ use std::process::Command;
 use serde::{Deserialize, Serialize};
 
 use crate::diff::{self, DiffError};
-use crate::git::{git_command, git_read_command, map_io_err, stderr_of, GitError};
+use crate::git::{
+    git_command, git_literal_command, git_read_command, map_io_err, reject_unusable_path,
+    stderr_of, GitError,
+};
 use crate::mergechunks::{
     chunks, equivalent_ignoring_marker_labels, serialize_result, Labels, PlacedChunk,
 };
@@ -1013,58 +1016,28 @@ pub fn resolve_path(root: &Path, path: &str, resolution: PathResolution) -> Resu
         // `checkout --ours/--theirs` writes that stage into the working tree;
         // staging it is what marks the path resolved.
         PathResolution::KeepOurs => {
-            run(git_command(root).args(["checkout", "--ours", "--", path]))?;
+            run(git_literal_command(root).args(["checkout", "--ours", "--", path]))?;
             stage(root, path)
         }
         PathResolution::KeepTheirs => {
-            run(git_command(root).args(["checkout", "--theirs", "--", path]))?;
+            run(git_literal_command(root).args(["checkout", "--theirs", "--", path]))?;
             stage(root, path)
         }
         // -f because the path is unmerged, which plain `git rm` refuses to touch:
         // it cannot tell a deliberate "the deletion is the resolution" from an
         // accident. The button that reaches here says it deletes the file.
-        PathResolution::AcceptDeletion => run(git_command(root).args(["rm", "-f", "--", path])),
+        PathResolution::AcceptDeletion => {
+            run(git_literal_command(root).args(["rm", "-f", "--", path]))
+        }
         // Whatever is in the working tree is what the user meant; nothing is
         // overwritten on the way.
         PathResolution::MarkResolved => stage(root, path),
     }
 }
 
-/// Reject a path git would read as a *pathspec* rather than a plain file.
-///
-/// `--` stops option parsing, not pathspec magic: `git rm -f -- ':(glob)**'`
-/// still expands, and this is the one command here that deletes the user's files.
-/// Every path reaching these functions comes from `git status` today, so this is
-/// hardening — the kind worth having on the destructive path rather than
-/// arguing about.
-fn reject_unusable_path(path: &str) -> Result<(), GitError> {
-    if path.is_empty() {
-        return Err(GitError::Invalid("no file to resolve".to_string()));
-    }
-    // `:` introduces every form of pathspec magic (`:(glob)`, `:!`, `:/`).
-    if path.starts_with(':') {
-        return Err(GitError::Invalid(format!(
-            "'{path}' is a pathspec, not a file"
-        )));
-    }
-    // Absolute paths, drive prefixes and `..` traversal, as the diff module's
-    // write path rejects them.
-    for component in std::path::Path::new(path).components() {
-        match component {
-            std::path::Component::Normal(_) | std::path::Component::CurDir => {}
-            _ => {
-                return Err(GitError::Invalid(format!(
-                    "'{path}' resolves outside the repository"
-                )))
-            }
-        }
-    }
-    Ok(())
-}
-
 /// `git add -- <path>`: what marks a conflicted path resolved.
 fn stage(root: &Path, path: &str) -> Result<(), GitError> {
-    run(git_command(root).args(["add", "--", path]))
+    run(git_literal_command(root).args(["add", "--", path]))
 }
 
 /// Run a prepared command, mapping a non-zero exit to git's own output.
@@ -1355,22 +1328,6 @@ second theirs
             envs.contains(&("GIT_MERGE_AUTOEDIT".to_string(), Some("no".to_string()))),
             "GIT_MERGE_AUTOEDIT must be neutralised: {envs:?}"
         );
-    }
-
-    #[test]
-    fn a_pathspec_is_refused_before_a_destructive_command_runs() {
-        // `--` stops option parsing, not pathspec magic, and `git rm -f` deletes
-        // files: `:(glob)**` would reach every tracked path in the repo.
-        assert!(reject_unusable_path("src/app.ts").is_ok());
-        assert!(reject_unusable_path("./src/app.ts").is_ok());
-        assert!(reject_unusable_path(":(glob)**").is_err());
-        assert!(reject_unusable_path(":!src").is_err());
-        assert!(reject_unusable_path("").is_err());
-        assert!(reject_unusable_path("../outside.txt").is_err());
-        #[cfg(unix)]
-        assert!(reject_unusable_path("/etc/passwd").is_err());
-        #[cfg(windows)]
-        assert!(reject_unusable_path("C:\\Windows\\win.ini").is_err());
     }
 
     #[test]

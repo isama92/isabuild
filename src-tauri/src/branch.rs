@@ -579,7 +579,7 @@ pub fn create(root: &Path, name: &str, base: Option<&str>) -> Result<(), GitErro
         reject_unusable(base)?;
         cmd.arg(base);
     }
-    run_checked(cmd)
+    run_checked(&mut cmd)
 }
 
 /// Delete a local branch. Without `force`, git refuses one whose commits are
@@ -588,7 +588,7 @@ pub fn delete(root: &Path, name: &str, force: bool) -> Result<(), GitError> {
     reject_unusable(name)?;
     let mut cmd = git_command(root);
     cmd.args(["branch", if force { "-D" } else { "-d" }, "--", name]);
-    run_checked(cmd)
+    run_checked(&mut cmd)
 }
 
 pub fn rename(root: &Path, from: &str, to: &str) -> Result<(), GitError> {
@@ -596,7 +596,7 @@ pub fn rename(root: &Path, from: &str, to: &str) -> Result<(), GitError> {
     reject_unusable(to)?;
     let mut cmd = git_command(root);
     cmd.args(["branch", "-m", "--", from, to]);
-    run_checked(cmd)
+    run_checked(&mut cmd)
 }
 
 /// `Ok(None)` when `name` is usable as a new branch, `Ok(Some(reason))` when it
@@ -682,7 +682,7 @@ fn run_switch(root: &Path, target: &SwitchTarget) -> Result<(), GitError> {
             cmd.args(["switch", &target.branch]);
         }
     }
-    run_checked(cmd)
+    run_checked(&mut cmd)
 }
 
 fn is_dirty(root: &Path) -> Result<bool, GitError> {
@@ -694,7 +694,7 @@ fn stash_changes(root: &Path, branch: &str) -> Result<(), GitError> {
     let message = format!("{STASH_MARKER}{branch}");
     let mut cmd = git_command(root);
     cmd.args(["stash", "push", "--include-untracked", "-m", &message]);
-    run_checked(cmd)
+    run_checked(&mut cmd)
 }
 
 fn find_stash(root: &Path, branch: &str) -> Result<Option<String>, GitError> {
@@ -716,7 +716,7 @@ fn find_stash(root: &Path, branch: &str) -> Result<Option<String>, GitError> {
 fn pop_stash(root: &Path, stash_ref: &str) -> Result<(), GitError> {
     let mut cmd: Command = git_command(root);
     cmd.args(["stash", "pop", "--index", stash_ref]);
-    run_checked(cmd)
+    run_checked(&mut cmd)
 }
 
 #[cfg(test)]

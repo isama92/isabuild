@@ -9,6 +9,7 @@ use tauri::{AppHandle, Emitter, Manager as _, State};
 
 use crate::branch::{self, BranchState, DirtyPolicy, SwitchOutcome, SwitchTarget};
 use crate::diff::{self, Eol, FileDiff};
+use crate::files::{self, CommitOutcome};
 use crate::fonts::{self, FontFamily};
 use crate::git::{self, GitError, GitStatus};
 use crate::gitops::GitOps;
@@ -521,6 +522,71 @@ pub async fn git_resolve_path(
 ) -> Result<(), String> {
     with_op_lock(&ops, "resolve-path", move || {
         merge::resolve_path(Path::new(&repo_root), &path, resolution)
+    })
+    .await
+}
+
+// --- Per-file actions from the status panel ---------------------------------
+//
+// All four write the index or the working tree, so all four take the op lock:
+// none may interleave with a switch, a pull or a conflict resolution. `orig_path`
+// is the rename/copy origin `git_status` reported, and reaches git as a second
+// pathspec — see [`crate::files`].
+
+/// `git add` one path.
+#[tauri::command]
+pub async fn git_stage_path(
+    ops: State<'_, GitOps>,
+    repo_root: String,
+    path: String,
+    orig_path: Option<String>,
+) -> Result<(), String> {
+    with_op_lock(&ops, "stage", move || {
+        files::stage(Path::new(&repo_root), &path, orig_path.as_deref())
+    })
+    .await
+}
+
+/// Drop one path's index entry, leaving the file alone.
+#[tauri::command]
+pub async fn git_unstage_path(
+    ops: State<'_, GitOps>,
+    repo_root: String,
+    path: String,
+    orig_path: Option<String>,
+) -> Result<(), String> {
+    with_op_lock(&ops, "unstage", move || {
+        files::unstage(Path::new(&repo_root), &path, orig_path.as_deref())
+    })
+    .await
+}
+
+/// Put one path back the way HEAD has it, deleting it if HEAD does not have it
+/// at all. Destructive and unrecoverable; the frontend confirms first.
+#[tauri::command]
+pub async fn git_rollback_path(
+    ops: State<'_, GitOps>,
+    repo_root: String,
+    path: String,
+    orig_path: Option<String>,
+) -> Result<(), String> {
+    with_op_lock(&ops, "rollback", move || {
+        files::rollback(Path::new(&repo_root), &path, orig_path.as_deref())
+    })
+    .await
+}
+
+/// Commit one path with `message`, leaving the rest of the index alone.
+#[tauri::command]
+pub async fn git_commit_path(
+    ops: State<'_, GitOps>,
+    repo_root: String,
+    path: String,
+    orig_path: Option<String>,
+    message: String,
+) -> Result<CommitOutcome, String> {
+    with_op_lock(&ops, "commit", move || {
+        files::commit_path(Path::new(&repo_root), &path, orig_path.as_deref(), &message)
     })
     .await
 }

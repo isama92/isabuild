@@ -781,6 +781,88 @@ body {
   border-top: 1px solid var(--ib-border-strong);
 }
 
+/* --- Status panel: per-file context menu ---
+   position:fixed, placed by lib/contextMenu at the cursor. Fixed rather than
+   absolute because the panel scrolls and #root is overflow:hidden — an absolute
+   menu would be clipped by the row list it belongs to. Same tokens as the branch
+   row actions above, so both popovers read as one thing in both themes. */
+
+.file-menu {
+  position: fixed;
+  z-index: 30;
+  display: flex;
+  flex-direction: column;
+  min-width: 168px;
+  padding: 3px;
+  background: var(--ib-bg-raised);
+  border: 1px solid var(--ib-border-stronger);
+  border-radius: 5px;
+  box-shadow: 0 4px 16px var(--ib-backdrop);
+  font: 12px/1 system-ui, sans-serif;
+}
+
+.file-menu-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  width: 100%;
+  border: none;
+  border-radius: 3px;
+  background: transparent;
+  color: var(--ib-text-bright);
+  font: 12px/1 system-ui, sans-serif;
+  text-align: left;
+  padding: 7px 9px;
+  cursor: pointer;
+}
+
+.file-menu-item:hover:not(:disabled) {
+  background: var(--ib-bg-button);
+}
+
+.file-menu-item:focus-visible {
+  outline: 1px solid var(--ib-focus);
+  outline-offset: -1px;
+}
+
+.file-menu-item:disabled {
+  color: var(--ib-text-disabled);
+  cursor: default;
+}
+
+.file-menu-item--danger:hover:not(:disabled) {
+  background: var(--ib-danger);
+  color: var(--ib-text-on-fill);
+}
+
+.file-menu-nest {
+  display: flex;
+  flex-direction: column;
+}
+
+.file-menu-arrow {
+  color: var(--ib-text-dim);
+}
+
+/* Expands in place rather than flying out to the right, and that is a
+   correctness choice, not a style one: a floating panel is out of flow, so
+   `getBoundingClientRect` on the menu does not include it and clampMenuPosition
+   cannot keep it on screen. #root is overflow:hidden, so the overflow would be
+   clipped away rather than scrollable — the last items of a menu opened near the
+   bottom edge became unclickable. In flow, the menu measurably grows and the
+   existing clamping moves the whole thing up. */
+.file-submenu {
+  display: flex;
+  flex-direction: column;
+  margin: 2px 0 2px 10px;
+  border-left: 1px solid var(--ib-border-strong);
+}
+
+.file-submenu .file-menu-item {
+  padding-left: 12px;
+}
+
 .branch-menu-new {
   width: 100%;
   border: none;
@@ -868,6 +950,22 @@ body {
   margin: 4px 0 0;
   color: var(--ib-deleted);
   font-size: 12px;
+}
+
+/* Not a problem and not an aside: something true the user has to weigh before
+   clicking (the working-tree/index difference a per-file commit exposes). Uses
+   the "modified" role rather than the "deleted" one, which is for refusals. */
+.modal-caution {
+  margin: 8px 0 0;
+  color: var(--ib-modified);
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.modal-textarea {
+  resize: vertical;
+  min-height: 64px;
+  font-family: inherit;
 }
 
 /* git's stderr, verbatim: monospace, selectable, and scrollable rather than

@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { binaryConflictActions, conflictActions, conflictLabel } from "./conflictView";
+import {
+  binaryConflictActions,
+  conflictActions,
+  conflictLabel,
+  conflictOurSide,
+} from "./conflictView";
 import type { ConflictKind } from "./gitStatus";
 
 const ALL_KINDS: ConflictKind[] = [
@@ -20,6 +25,32 @@ describe("conflictLabel", () => {
       expect(label).not.toBe("");
       expect(label).not.toBe(kind);
     }
+  });
+});
+
+describe("conflictOurSide", () => {
+  it("answers for every kind, with no silent default", () => {
+    for (const kind of ALL_KINDS) {
+      expect(["present", "absent", "unknown"]).toContain(conflictOurSide(kind));
+    }
+  });
+
+  it("says our side is absent exactly where HEAD does not have the path", () => {
+    // From the `u XY` table: X is our side, so D (we deleted it) and a two-sided
+    // add mean HEAD has nothing to restore. Rolling such a path back therefore
+    // deletes the file, which is what the confirmation has to say.
+    expect(conflictOurSide("deletedByUs")).toBe("absent");
+    expect(conflictOurSide("bothDeleted")).toBe("absent");
+    expect(conflictOurSide("addedByThem")).toBe("absent");
+    expect(conflictOurSide("bothAdded")).toBe("absent");
+
+    expect(conflictOurSide("bothModified")).toBe("present");
+    expect(conflictOurSide("addedByUs")).toBe("present");
+    expect(conflictOurSide("deletedByThem")).toBe("present");
+
+    // An XY git has never documented: say so rather than guess, since the answer
+    // decides between restoring and deleting.
+    expect(conflictOurSide("unknown")).toBe("unknown");
   });
 });
 

@@ -21,6 +21,35 @@ export function conflictLabel(kind: ConflictKind): string {
   return KIND_LABEL[kind];
 }
 
+/**
+ * Whether *our* side — what HEAD holds — has this path at all.
+ *
+ * Follows from the same `u XY` table the kind was derived from: `X` is our side,
+ * so `A` (we added it) and `M`/`U` (we have it and changed it) mean HEAD has the
+ * path, while `D` (we deleted it) and a two-sided add mean it does not.
+ *
+ * Load-bearing for wording, not for a command: rolling a conflicted path back
+ * restores HEAD's version, so on `deletedByUs`, `bothDeleted` and `addedByThem`
+ * that *deletes* the file. A dialog promising to restore it would be a lie about
+ * an irreversible action. `unknown` is an XY git has never documented, so it says
+ * so rather than guessing.
+ */
+export function conflictOurSide(kind: ConflictKind): "present" | "absent" | "unknown" {
+  switch (kind) {
+    case "bothModified":
+    case "addedByUs":
+    case "deletedByThem":
+      return "present";
+    case "bothAdded":
+    case "bothDeleted":
+    case "addedByThem":
+    case "deletedByUs":
+      return "absent";
+    case "unknown":
+      return "unknown";
+  }
+}
+
 export interface ConflictAction {
   resolution: PathResolution;
   /** Button text. Short: these sit inline in a 22%-wide panel. */

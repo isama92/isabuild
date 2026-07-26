@@ -1,6 +1,7 @@
 pub mod branch;
 mod commands;
 pub mod diff;
+pub mod files;
 pub mod fonts;
 pub mod git;
 pub mod gitops;
@@ -172,6 +173,10 @@ pub fn run() {
             commands::git_op,
             commands::git_write_resolved,
             commands::git_resolve_path,
+            commands::git_stage_path,
+            commands::git_unstage_path,
+            commands::git_rollback_path,
+            commands::git_commit_path,
             commands::bootstrap,
             commands::settings_get,
             commands::settings_update,

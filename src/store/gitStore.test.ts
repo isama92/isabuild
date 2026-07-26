@@ -4,6 +4,7 @@ import { listen } from "@tauri-apps/api/event";
 import { initialGitState, useGitStore, type GitStatusPhase } from "./gitStore";
 import type { BranchState } from "../lib/gitBranch";
 import type { GitStatus } from "../lib/gitStatus";
+import type { FileTarget } from "../lib/fileActions";
 import { mergeState } from "../test/factories";
 
 vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn() }));
@@ -863,6 +864,165 @@ describe("gitStore merge actions", () => {
     );
 
     expect(useGitStore.getState().opError?.title).toBe("Could not resolve gone.ts");
+  });
+});
+
+describe("gitStore per-file actions", () => {
+  /** A status-panel row: an unstaged modification unless told otherwise. */
+  function row(path: string, overrides: Partial<FileTarget> = {}): FileTarget {
+    return { path, group: "unstaged", status: "modified", ...overrides };
+  }
+
+  beforeEach(() => {
+    useGitStore.setState({ repoRoot: "/repo" });
+  });
+
+  /** The three reads a mutation refreshes with, all answering an empty repo. */
+  function reads(extra: Record<string, unknown> = {}) {
+    routeInvokes({
+      git_status: EMPTY_STATUS,
+      git_branch_state: branchState(),
+      git_merge_state: mergeState("none"),
+      ...extra,
+    });
+  }
+
+  it("stages a path and refreshes", async () => {
+    reads({ git_stage_path: undefined });
+
+    await expect(useGitStore.getState().stageFile(row("src/app.ts"))).resolves.toBe(true);
+
+    expect(invokeMock).toHaveBeenCalledWith("git_stage_path", {
+      repoRoot: "/repo",
+      path: "src/app.ts",
+      origPath: null,
+    });
+    expect(invokeMock).toHaveBeenCalledWith("git_status", { path: "/repo" });
+  });
+
+  it("unstages a path, carrying the rename origin", async () => {
+    reads({ git_unstage_path: undefined });
+
+    await expect(
+      useGitStore.getState().unstageFile(row("new.ts", { origPath: "old.ts", group: "staged", status: "renamed" })),
+    ).resolves.toBe(true);
+
+    expect(invokeMock).toHaveBeenCalledWith("git_unstage_path", {
+      repoRoot: "/repo",
+      path: "new.ts",
+      origPath: "old.ts",
+    });
+  });
+
+  it("rolls a path back", async () => {
+    reads({ git_rollback_path: undefined });
+
+    await expect(useGitStore.getState().rollbackFile(row("notes.md"))).resolves.toBe(true);
+
+    expect(invokeMock).toHaveBeenCalledWith("git_rollback_path", {
+      repoRoot: "/repo",
+      path: "notes.md",
+      origPath: null,
+    });
+  });
+
+  it("commits a path and notes the new sha", async () => {
+    reads({ git_commit_path: { sha: "1a2b3c4" } });
+
+    await expect(
+      useGitStore.getState().commitFile(row("src/app.ts"), "fix the thing"),
+    ).resolves.toBe(true);
+
+    expect(invokeMock).toHaveBeenCalledWith("git_commit_path", {
+      repoRoot: "/repo",
+      path: "src/app.ts",
+      origPath: null,
+      message: "fix the thing",
+    });
+    expect(useGitStore.getState().notice).toBe("Committed 1a2b3c4");
+  });
+
+  it("still notes a commit whose sha could not be read back", async () => {
+    reads({ git_commit_path: { sha: null } });
+
+    await expect(useGitStore.getState().commitFile(row("a.ts"), "msg")).resolves.toBe(true);
+
+    expect(useGitStore.getState().notice).toBe("Committed");
+  });
+
+  it("reports git's refusal with a command to retry, and no notice", async () => {
+    routeInvokes({
+      git_commit_path: new Error("fatal: cannot do a partial commit during a merge"),
+    });
+
+    await expect(
+      useGitStore.getState().commitFile(row("file.txt"), "half a merge"),
+    ).resolves.toBe(false);
+
+    const error = useGitStore.getState().opError;
+    expect(error?.title).toBe("Could not commit file.txt");
+    expect(error?.detail).toMatch(/partial commit/);
+    expect(error?.command).toBe("git commit -m 'half a merge' -- file.txt");
+    expect(useGitStore.getState().notice).toBeNull();
+  });
+
+  it("quotes a message the shell would otherwise expand", async () => {
+    // The retry command is typed into a real shell, so a message holding $HOME
+    // or a quote has to survive it intact.
+    routeInvokes({ git_commit_path: new Error("nope") });
+
+    await useGitStore.getState().commitFile(row("a.ts"), "don't touch $HOME");
+
+    expect(useGitStore.getState().opError?.command).toBe(
+      "git commit -m 'don'\\''t touch $HOME' -- a.ts",
+    );
+  });
+
+  it("quotes a path with a space, and names both halves of a rename", async () => {
+    routeInvokes({ git_rollback_path: new Error("nope") });
+
+    await useGitStore.getState().rollbackFile(row("my file.ts", { origPath: "old.ts" }));
+
+    expect(useGitStore.getState().opError?.command).toBe(
+      "git checkout HEAD -- 'my file.ts' old.ts",
+    );
+  });
+
+  it("offers the clean command to retry when rolling back really deletes", async () => {
+    // The backend runs `rm --cached` plus `clean` for a path HEAD does not have.
+    // Offering `git checkout HEAD --` there would fail for a different reason
+    // than the failure the user is looking at.
+    routeInvokes({ git_rollback_path: new Error("nope") });
+
+    await useGitStore.getState().rollbackFile(row("notes.md", { status: "untracked" }));
+
+    expect(useGitStore.getState().opError?.command).toBe("git clean -f -d -- notes.md");
+  });
+
+  it("does not announce a commit whose project has since been closed", async () => {
+    // `mutate` already suppresses the error for a superseded repo; the notice has
+    // to follow the same rule, or it outlives everything else about that project.
+    const gate = deferred<{ sha: string }>();
+    invokeMock.mockImplementation((command: string) =>
+      command === "git_commit_path" ? gate.promise : Promise.resolve(undefined),
+    );
+    const pending = useGitStore.getState().commitFile(row("a.ts"), "msg");
+
+    // What projectStore.resetForProjectSwitch does.
+    useGitStore.setState((state) => ({ ...initialGitState, generation: state.generation + 1 }));
+    gate.resolve({ sha: "1a2b3c4" });
+
+    await expect(pending).resolves.toBe(false);
+    expect(useGitStore.getState().notice).toBeNull();
+  });
+
+  it("reports a failed stage without wedging", async () => {
+    routeInvokes({ git_stage_path: new Error("index.lock exists") });
+
+    await expect(useGitStore.getState().stageFile(row("src/app.ts"))).resolves.toBe(false);
+
+    expect(useGitStore.getState().opError?.title).toBe("Could not stage src/app.ts");
+    expect(useGitStore.getState().opError?.command).toBe("git add -- src/app.ts");
   });
 });
 

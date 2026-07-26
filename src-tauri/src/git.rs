@@ -268,6 +268,27 @@ pub(crate) fn git_command(dir: &Path) -> Command {
     cmd
 }
 
+/// [`git_command`] for a command whose pathspecs are **paths from the
+/// filesystem**, which is every path in this app: they all come from
+/// `git status`.
+///
+/// A git pathspec is a glob, and `*` in one crosses `/`. `*`, `?` and `[...]` are
+/// legal in filenames, so a file literally named `*` is reported as an ordinary
+/// untracked row — and `git clean -f -d -- '*'` on that row deletes the entire
+/// working tree. `--` is no defence: it stops option parsing, not glob expansion.
+/// `GIT_LITERAL_PATHSPECS` makes a pathspec mean exactly the bytes it contains,
+/// which is what a path taken from the filesystem always meant.
+///
+/// Not folded into [`git_command`] because it is not universally accepted:
+/// `git check-ignore` refuses the `literal` magic outright ("pathspec magic not
+/// supported by this command"), and that one really does want git's own matching.
+/// So it goes on the commands that mutate files, where a mistake is unrecoverable.
+pub(crate) fn git_literal_command(dir: &Path) -> Command {
+    let mut cmd = git_command(dir);
+    cmd.env("GIT_LITERAL_PATHSPECS", "1");
+    cmd
+}
+
 /// [`git_command`] for read-only queries. `--no-optional-locks` stops git from
 /// taking `index.lock` just to refresh the index, so a watcher-driven read
 /// (which fires *during* a checkout or a pull — see Part 5's op lock) can never
@@ -308,13 +329,53 @@ pub(crate) fn stderr_of(output: &std::process::Output) -> String {
 }
 
 /// Run a git command that produces no output of interest, mapping a non-zero
-/// exit to [`GitError::CommandFailed`] carrying git's own stderr.
-pub(crate) fn run_checked(mut cmd: Command) -> Result<(), GitError> {
+/// exit to [`GitError::CommandFailed`] carrying git's own output.
+///
+/// Takes `&mut` so a caller can pass a builder chain (`git_command(root).args(…)`)
+/// directly. [`stderr_of`] falls back to stdout, which matters for the commands
+/// that put their most useful refusals there — `git commit` on an empty message,
+/// `git checkout` on a partial commit during a merge, and any hook's output.
+pub(crate) fn run_checked(cmd: &mut Command) -> Result<(), GitError> {
     let output = cmd.output().map_err(map_io_err)?;
     if output.status.success() {
         return Ok(());
     }
     Err(GitError::CommandFailed(stderr_of(&output)))
+}
+
+/// Reject a path git would read as something other than a file inside the repo.
+///
+/// Second line of defence, behind `GIT_LITERAL_PATHSPECS` in [`git_command`]:
+/// that already strips every pathspec of its magic, and this refuses the forms
+/// that would be wrong even as literals — a leading `:`, an absolute path, a
+/// drive prefix, `..` traversal. Callers here delete and overwrite the user's
+/// files, so both are worth having.
+///
+/// Shared by `merge` and `files` rather than duplicated: four commands that can
+/// delete a file must not each carry their own copy of this check.
+pub(crate) fn reject_unusable_path(path: &str) -> Result<(), GitError> {
+    if path.is_empty() {
+        return Err(GitError::Invalid("no file given".to_string()));
+    }
+    // `:` introduces every form of pathspec magic (`:(glob)`, `:!`, `:/`).
+    if path.starts_with(':') {
+        return Err(GitError::Invalid(format!(
+            "'{path}' is a pathspec, not a file"
+        )));
+    }
+    // Absolute paths, drive prefixes and `..` traversal, as the diff module's
+    // write path rejects them.
+    for component in Path::new(path).components() {
+        match component {
+            std::path::Component::Normal(_) | std::path::Component::CurDir => {}
+            _ => {
+                return Err(GitError::Invalid(format!(
+                    "'{path}' resolves outside the repository"
+                )))
+            }
+        }
+    }
+    Ok(())
 }
 
 pub(crate) fn map_io_err(e: std::io::Error) -> GitError {
@@ -491,6 +552,26 @@ mod tests {
     fn empty_input_yields_no_entries() {
         assert_eq!(parse_porcelain_v2(&[]), (vec![], vec![], vec![]));
         assert_eq!(parse_porcelain_v2(&z(&[])), (vec![], vec![], vec![]));
+    }
+
+    #[test]
+    fn a_pathspec_is_refused_before_a_destructive_command_runs() {
+        // `--` stops option parsing, not pathspec magic, and `git rm -f` and
+        // `git clean -fd` delete files: `:(glob)**` would reach every tracked
+        // path in the repo.
+        assert!(reject_unusable_path("src/app.ts").is_ok());
+        assert!(reject_unusable_path("./src/app.ts").is_ok());
+        // An untracked directory arrives collapsed, with the trailing slash git
+        // reports; that is still a plain path.
+        assert!(reject_unusable_path("src/generated/").is_ok());
+        assert!(reject_unusable_path(":(glob)**").is_err());
+        assert!(reject_unusable_path(":!src").is_err());
+        assert!(reject_unusable_path("").is_err());
+        assert!(reject_unusable_path("../outside.txt").is_err());
+        #[cfg(unix)]
+        assert!(reject_unusable_path("/etc/passwd").is_err());
+        #[cfg(windows)]
+        assert!(reject_unusable_path("C:\\Windows\\win.ini").is_err());
     }
 
     #[test]
