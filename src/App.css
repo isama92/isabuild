@@ -4,7 +4,7 @@
 
    Every colour is a `--ib-*` custom property, written on the document root by
    `lib/appearance` from the theme registry in src/theme/themes. There are no
-   colour literals here on purpose: the terminal, the Monaco diff and the
+   colour literals here on purpose: the terminal, the diff panes and the
    CodeMirror merge panes all read the same tokens, and a literal in one place
    is how four surfaces end up disagreeing about what "the background" is. */
 

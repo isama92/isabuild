@@ -97,6 +97,21 @@ export const ACTIONS: readonly KeyAction[] = [
     scopes: ["diff", "merge"],
     defaultAccelerator: "Escape",
   },
+  // The diff window's pair and the merge window's pair share their defaults on
+  // purpose: they are the same gesture for the same idea, and `conflictsWith`
+  // only reports an overlap *within* a scope, so no window can reach both.
+  {
+    id: "next-change",
+    label: "Next change",
+    scopes: ["diff"],
+    defaultAccelerator: "Alt+ArrowDown",
+  },
+  {
+    id: "previous-change",
+    label: "Previous change",
+    scopes: ["diff"],
+    defaultAccelerator: "Alt+ArrowUp",
+  },
   {
     id: "next-conflict",
     label: "Next conflict",

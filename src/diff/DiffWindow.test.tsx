@@ -6,11 +6,15 @@ import { getFileDiff, writeWorkingFile, type FileDiff } from "../lib/diffSource"
 import { onRepoChanged } from "../lib/gitStatus";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 
-// DiffPane is the Monaco boundary and cannot run under jsdom. The stub stands
-// in for the two things the window talks to it through — the content it
-// displays and the edit callback — and copies the one behaviour those tests
-// depend on: the buffer lives inside the pane, and an incoming `right` replaces
-// it only when it actually changed (DiffPane's setValue guard).
+// DiffPane is the CodeMirror boundary. It is stubbed here — not because it cannot
+// run under jsdom (it can, and DiffPane.test drives the real thing), but because
+// this file is about the window's auto-save and refresh logic, and a real MergeView
+// would make every test in it depend on a diff algorithm's output.
+//
+// The stub stands in for the two things the window talks to it through — the
+// content it displays and the edit callback — and copies the one behaviour these
+// tests depend on: the buffer lives inside the pane, and an incoming `right`
+// replaces it only when it actually changed (the real pane's equality guard).
 vi.mock("./DiffPane", () => ({
   DiffPane: ({
     left,
@@ -332,8 +336,8 @@ describe("DiffWindow", () => {
   });
 
   it("leaves a key alone once something else has handled it", async () => {
-    // Monaco consumes Escape to dismiss its own widgets (the find bar) and marks
-    // the event handled; the window must not close out from under that.
+    // CodeMirror consumes Escape to close the find panel and marks the event
+    // handled; the window must not close out from under that.
     await renderReady();
 
     const handled = new KeyboardEvent("keydown", { key: "Escape", code: "Escape", cancelable: true });

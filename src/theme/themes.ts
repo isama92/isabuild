@@ -3,7 +3,7 @@
 // One `Theme` per palette, and a select rendered from the list: adding a third
 // is another object here and nothing else. Every colour in the app comes from
 // one of these tokens — the CSS through custom properties written on the
-// document root, and xterm, Monaco and CodeMirror through the same object,
+// document root, and xterm and CodeMirror through the same object,
 // because none of the three can read CSS for its own drawing.
 //
 // The token names are *roles*, not colours. `--ib-danger` is what a destructive
@@ -88,13 +88,21 @@ export interface ThemeTokens {
   chunkTheirs: string;
   chunkAgreed: string;
   chunkConflict: string;
-  /** Scrollbar overview marks in the diff window. */
+  /** Overview-strip marks in the diff window. */
   markAdded: string;
   markModified: string;
   markDeleted: string;
+  /**
+   * Diff line tints and the intra-line highlight. Distinct from the `chunk*`
+   * tints above because a diff says *which way* a line moved — inserted or
+   * deleted — where a merge chunk says *whose* it is.
+   */
+  diffInsertedBg: string;
+  diffDeletedBg: string;
+  diffChangedText: string;
 
-  // Syntax highlighting, shared by Monaco and CodeMirror so a file looks the
-  // same in the diff window and the merge window.
+  // Syntax highlighting, shared by every editor pane so a file looks the same
+  // in the diff window and the merge window.
   synKeyword: string;
   synString: string;
   synComment: string;
@@ -131,9 +139,9 @@ export interface Theme {
   /** Shown in the settings select. */
   label: string;
   /**
-   * Whether this is a dark theme. Editors need it as a flag, not as a colour:
-   * CodeMirror's `EditorView.theme` takes `{ dark }`, and Monaco's theme `base`
-   * picks the defaults for everything we do not name.
+   * Whether this is a dark theme. The editors need it as a flag, not as a
+   * colour: CodeMirror's `EditorView.theme` takes `{ dark }`, and that is what
+   * picks its defaults for everything we do not name ourselves.
    */
   dark: boolean;
   tokens: ThemeTokens;
@@ -197,6 +205,9 @@ const VSCODE_DARK: Theme = {
     markAdded: "#89d185",
     markModified: "#6cb6ff",
     markDeleted: "#f14c4c",
+    diffInsertedBg: "rgba(137, 209, 133, 0.13)",
+    diffDeletedBg: "rgba(241, 76, 76, 0.13)",
+    diffChangedText: "rgba(108, 182, 255, 0.32)",
 
     synKeyword: "#569cd6",
     synString: "#ce9178",
@@ -291,6 +302,9 @@ const VSCODE_LIGHT: Theme = {
     markAdded: "#487e02",
     markModified: "#005fb8",
     markDeleted: "#ad0707",
+    diffInsertedBg: "rgba(72, 126, 2, 0.11)",
+    diffDeletedBg: "rgba(173, 7, 7, 0.09)",
+    diffChangedText: "rgba(0, 95, 184, 0.22)",
 
     synKeyword: "#0000ff",
     synString: "#a31515",

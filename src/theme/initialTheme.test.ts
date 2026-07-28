@@ -40,7 +40,7 @@ describe("applyInitialTheme", () => {
   });
 
   it("publishes, so the editors and the terminal see it too", () => {
-    // The CSS variables are only half of it: xterm, Monaco and CodeMirror seed
+    // The CSS variables are only half of it: xterm and CodeMirror seed
     // themselves from `currentAppearance()`, and merely applying would leave a
     // correctly-themed chrome around a default-themed editor.
     applyInitialTheme(`?${THEME_PARAM}=vscode-light`);

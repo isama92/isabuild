@@ -19,6 +19,7 @@ function settings(keybindings: Record<string, string> = {}): Settings {
     fontFamily: "",
     fontSize: 14,
     keybindings,
+    viewOptions: {},
     lastProject: null,
     recentProjects: [],
   };
@@ -72,7 +73,7 @@ describe("useWindowKeybindings", () => {
   });
 
   it("leaves a key the editor has already handled alone", () => {
-    // Monaco consumes Escape to dismiss its find bar, CodeMirror to close
+    // CodeMirror consumes Escape to close the find panel and to dismiss
     // autocomplete. Closing the window as well would be two things at once.
     render(<Harness scope="diff" handlers={{ "close-window": close }} />);
     // Capture phase, so it runs before the hook's bubble-phase listener the

@@ -5,7 +5,7 @@
 //! functions ([`looks_binary`], [`detect_eol`], [`apply_eol`], the path
 //! resolvers) and the shell-out layer around them stays thin. Contents come
 //! from plumbing (`git cat-file blob HEAD:<path>`), never from human-readable
-//! `git diff` output — the diff itself is computed in Monaco, not here.
+//! `git diff` output — the diff itself is computed in the editor, not here.
 //!
 //! Line endings are the one thing this module normalises. With `core.autocrlf`
 //! on Windows the blob is stored LF while the checked-out file is CRLF, so
@@ -427,7 +427,7 @@ mod tests {
     #[test]
     fn crlf_worktree_against_an_lf_blob_is_not_a_whole_file_change() {
         // The Windows `core.autocrlf` case: identical content, different
-        // endings. Both sides must arrive as LF so Monaco sees no diff at all.
+        // endings. Both sides must arrive as LF so the editor sees no diff at all.
         let dir = repo_with_commit("file.txt", "one\ntwo\n");
         std::fs::write(dir.path().join("file.txt"), "one\r\ntwo\r\n").expect("edit");
 

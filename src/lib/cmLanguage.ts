@@ -1,14 +1,14 @@
-// Syntax highlighting for the merge panes, resolved against CodeMirror's own
+// Syntax highlighting for the editor panes, resolved against CodeMirror's own
 // language table.
 //
 // The same shape as lib/diffLanguage, and for the same reason: the descriptor
 // list is passed in, so this module never imports @codemirror/language-data and
-// stays a pure unit test. What differs is what a match *is*. Monaco holds one
+// stays a pure unit test. What differs is what a match *is*. The registry holds one
 // global registry keyed by language id, whereas CodeMirror ships a list of
 // descriptors that each carry their own lazy `load()`; the caller resolves a
 // descriptor here and awaits its module only if it found one.
 //
-// Matching rules are deliberately identical to diffLanguage's, so a conflicted
+// Matching rules are deliberately the same in both windows, so a conflicted
 // file highlights the same way in the merge window as in the diff window:
 // filename wins over extension, and a longer extension wins over a shorter one.
 

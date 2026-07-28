@@ -17,6 +17,7 @@ function settings(overrides: Partial<Settings> = {}): Settings {
     fontFamily: "",
     fontSize: 14,
     keybindings: {},
+    viewOptions: {},
     lastProject: null,
     recentProjects: [],
     ...overrides,
