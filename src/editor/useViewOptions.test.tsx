@@ -67,6 +67,18 @@ describe("useViewOptions", () => {
     expect(save).toHaveBeenCalledWith({ viewOptions: { "collapse-unchanged": true } });
   });
 
+  it("writes nothing before the settings have been read", () => {
+    // The map is replaced wholesale, so a write built from `{}` would erase every
+    // override this build does not recognise. Swallowing the click for the frame or
+    // two before the first read resolves is the cheaper mistake.
+    useSettingsStore.setState({ settings: null });
+    render(<Harness />);
+
+    seen?.toggle("collapse-unchanged");
+
+    expect(save).not.toHaveBeenCalled();
+  });
+
   it("keeps an option this build does not know about", () => {
     // A newer version's option would otherwise be erased the first time an older
     // one wrote — so rolling back to chase a bug would silently lose settings.

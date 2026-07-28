@@ -138,6 +138,16 @@ export function DiffPane({
   const hostRef = useRef<HTMLDivElement>(null);
   const mergeRef = useRef<MergeView | null>(null);
   const [stripes, setStripes] = useState<readonly Stripe[]>([]);
+  /**
+   * How many chunks the diff has.
+   *
+   * Kept apart from `stripes.length` on purpose: a stripe needs a *measured* pane
+   * to exist at all, so deriving the count from the strip would have the toolbar
+   * say "No changes in this file" for a pane that has not been measured yet — and
+   * disable navigation over changes that are plainly there. The strip is allowed to
+   * be empty until the geometry answers; the count is not.
+   */
+  const [changeCount, setChangeCount] = useState(0);
   /** Where to draw the drag handle, in pixels from the host's left edge. */
   const [sashX, setSashX] = useState<number | null>(null);
   const [theme, setTheme] = useState(() => currentAppearance()?.theme ?? DEFAULT_THEME);
@@ -176,6 +186,8 @@ export function DiffPane({
     const merge = mergeRef.current;
     const host = hostRef.current;
     if (!merge || !host) return;
+
+    setChangeCount(merge.chunks.length);
 
     const view = merge.b;
     const clamp = (pos: number) => Math.min(Math.max(pos, 0), view.state.doc.length);
@@ -325,7 +337,14 @@ export function DiffPane({
     const view = mergeRef.current?.a;
     if (!view || view.state.doc.toString() === left) return;
     view.dispatch({ changes: { from: 0, to: view.state.doc.length, insert: left } });
-  }, [left]);
+    // Re-measure explicitly, because nothing else will. A change to *this* side
+    // reaches the other one as a bare `setChunks` effect — MergeView's `dispatch`
+    // gives the non-target pane `other.update([…])` with no changes in it — so the
+    // update listener below sees neither `docChanged` nor, unless the spacers
+    // happened to move, `geometryChanged`. Without this the strip keeps painting
+    // chunks a new HEAD no longer has.
+    remeasure();
+  }, [left, remeasure]);
 
   // Keyed on the revision as well as the content — see the prop's doc comment: an
   // adopt can hand back a string this editor was already shown, and the revision
@@ -485,7 +504,7 @@ export function DiffPane({
             id: "previous-change",
             label: "◂ Previous",
             tooltip: "Go to the previous change",
-            disabled: stripes.length === 0,
+            disabled: changeCount === 0,
             onSelect: () => goToChange("previous"),
           },
           {
@@ -493,7 +512,7 @@ export function DiffPane({
             id: "next-change",
             label: "Next ▸",
             tooltip: "Go to the next change",
-            disabled: stripes.length === 0,
+            disabled: changeCount === 0,
             onSelect: () => goToChange("next"),
           },
         ],
@@ -502,13 +521,13 @@ export function DiffPane({
         kind: "status",
         id: "count",
         text:
-          stripes.length === 0
+          changeCount === 0
             ? "No changes in this file"
-            : `${stripes.length} ${stripes.length === 1 ? "change" : "changes"}`,
+            : `${changeCount} ${changeCount === 1 ? "change" : "changes"}`,
       },
       ...viewOptionItems("diff", options, toggle),
     ],
-    [goToChange, options, stripes.length, toggle],
+    [changeCount, goToChange, options, toggle],
   );
 
   return (

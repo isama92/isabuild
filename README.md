@@ -170,7 +170,7 @@ Each part is an independent piece of work, executed in order, and its entry belo
       `src/editor/viewOptions.ts`, so each new setting is an entry there plus a handler)
 - [ ] ctrl+arrows to move between spaces
 - [ ] when a tool (terminal or git) is closed with shortcut  (eg. alt+1), move focus on claude
-- [ ] allow doing ctrl+backspace to remove a word in therminal or claude
+- [ ] allow doing ctrl+backspace to remove a word in terminal or claude
 
 ## Global decisions
 

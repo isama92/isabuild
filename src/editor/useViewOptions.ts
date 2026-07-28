@@ -72,7 +72,15 @@ export function useViewOptions(): ViewOptions {
       // Read at click time, not at render time: another window's toggle may have
       // arrived through `settings://changed` in between, and flipping a value that
       // has already moved would undo their change instead of making ours.
-      const stored = useSettingsStore.getState().settings?.viewOptions ?? {};
+      const settings = useSettingsStore.getState().settings;
+      // Nothing to merge into yet. Writing here would send a map built from `{}`,
+      // and because the patch replaces the map wholesale that would erase every
+      // override this build does not recognise — the one thing this module promises
+      // not to do. The window is a frame or two, between the toolbar's first paint
+      // and the settings read resolving, so swallowing the click beats losing a
+      // setting over it.
+      if (settings === null) return;
+      const stored = settings.viewOptions;
       const current = resolveViewOptions(stored);
       void save({ viewOptions: nextOverrides(stored, id, !current[id]) });
     },

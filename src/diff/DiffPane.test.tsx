@@ -7,11 +7,13 @@
 //   all real and testable. `EditorView.findFromDOM` gets a handle on each pane, so
 //   a change can be dispatched the way the revert control's would be.
 // - **The change map needs a layout faked for it.** Its geometry comes from
-//   `lineBlockAt` and `contentHeight`, which jsdom reports as zeros, so every mark
-//   would otherwise collapse to nothing. `withLayout` stubs twenty pixels a line,
-//   which is enough to assert that the marks are wired to the chunks and to the
-//   theme. The arithmetic itself is `lib/diffStripes`' own test, against an
-//   injected geometry, and the strip's rendering is `editor/OverviewRuler.test`.
+//   `lineBlockAt` and `contentHeight`. jsdom measures nothing, so every line block
+//   comes back at top 0 — CodeMirror still *estimates* a content height, so marks do
+//   render, but they all pile up at the top on the minimum height, which proves
+//   nothing about where a mark goes. `withLayout` stubs twenty pixels a line, which
+//   is enough to assert that the marks are wired to the chunks and to the theme. The
+//   arithmetic itself is `lib/diffStripes`' own test, against an injected geometry,
+//   and the strip's rendering is `editor/OverviewRuler.test`.
 // - **A `»` cannot be clicked.** @codemirror/merge places the revert buttons from
 //   measured chunk positions, so under jsdom the column is there and empty. That
 //   the control is configured is asserted; clicking one is a manual check, exactly
@@ -301,6 +303,30 @@ describe("the toolbar", () => {
     expect(screen.getByRole("button", { name: "Next ▸" })).toBeInTheDocument();
   });
 
+  it("counts the changes even in a pane nothing has measured", async () => {
+    // A pane with no content height yet — its first frame, before CodeMirror has a
+    // height map. The strip is allowed to be empty until the geometry answers; the
+    // count and the navigation are not, or the toolbar would claim a file with one
+    // change has none and disable the buttons over it.
+    const { container } = render(<DiffPane {...props()} />);
+    await act(async () => {
+      vi.spyOn(pane(container, "b"), "contentHeight", "get").mockReturnValue(0);
+      pane(container, "b").dispatch({ changes: { from: 0, to: 0, insert: "" } });
+    });
+
+    await waitFor(() => {
+      expect(container.querySelectorAll(".ew-ruler-mark")).toHaveLength(0);
+    });
+    expect(screen.getByText("1 change")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Next ▸" })).toBeEnabled();
+  });
+
+  it("says so when there is nothing to navigate", () => {
+    render(<DiffPane {...props({ left: "one\nTWO\nthree\n" })} />);
+    expect(screen.getByText("No changes in this file")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Next ▸" })).toBeDisabled();
+  });
+
   it("names itself, so it is not just some buttons", () => {
     render(<DiffPane {...props()} />);
     expect(screen.getByRole("toolbar", { name: "Diff view" })).toBeInTheDocument();
@@ -348,9 +374,9 @@ describe("the divider", () => {
 /**
  * Give the working-tree pane a layout, so the change map has something to measure.
  *
- * jsdom reports every box as zero, which makes `computeStripes` return nothing and
- * the strip render empty — true to jsdom, useless for asserting that the marks are
- * wired to anything. Twenty pixels a line is enough for the geometry to be real.
+ * Without it every line block is at top 0 and each mark falls back to
+ * `MIN_HEIGHT` at the top of the strip — true to jsdom, and useless for asserting
+ * that a mark lands where its chunk is. Twenty pixels a line makes the geometry real.
  */
 function withLayout(container: HTMLElement): void {
   const view = pane(container, "b");
@@ -382,6 +408,30 @@ describe("the change map", () => {
     const mark = container.querySelector<HTMLElement>(".ew-ruler-mark");
     expect(mark?.dataset.kind).toBe("modified");
     expect(mark?.style.background).toBe(hexToRgb(DEFAULT_THEME.tokens.markModified));
+  });
+
+  it("drops the marks when a new HEAD leaves nothing to mark", async () => {
+    // The path nothing else covers: a change to the *HEAD* side reaches the other
+    // pane as a bare `setChunks` effect, with neither `docChanged` nor — unless the
+    // spacers move — `geometryChanged`, so the update listener never fires. A
+    // `commit --amend` or a checkout that lands an edit of the same line count would
+    // otherwise leave the strip marking chunks the file no longer has.
+    const { container, rerender } = render(<DiffPane {...props()} />);
+    await act(async () => {
+      withLayout(container);
+      pane(container, "b").dispatch({ changes: { from: 0, to: 0, insert: "" } });
+    });
+    await waitFor(() => {
+      expect(container.querySelectorAll(".ew-ruler-mark")).toHaveLength(1);
+    });
+
+    // HEAD catches up with the working tree: same line count, no chunk left.
+    rerender(<DiffPane {...props({ left: "one\nTWO\nthree\n" })} />);
+
+    await waitFor(() => {
+      expect(container.querySelectorAll(".ew-ruler-mark")).toHaveLength(0);
+    });
+    expect(screen.getByText("No changes in this file")).toBeInTheDocument();
   });
 
   it("recolours the marks when the theme changes", async () => {
