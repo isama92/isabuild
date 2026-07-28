@@ -20,7 +20,7 @@
 //   inserted — the diff window gets those from `@codemirror/merge`, which cannot
 //   help here because a MergeView is strictly two documents — so the panes drift
 //   apart in a long file, which is what makes next/previous conflict the primary way
-//   to move. README's Part 12 is the fix.
+//   to move. The README roadmap's "Align the merge panes" is the fix.
 // - **This component is remounted, not updated, when the file is reloaded.** The
 //   window keys it on the stages' revision, and only ever hands over new stages it
 //   has decided to adopt — so a reload it declined, to protect a touched buffer,

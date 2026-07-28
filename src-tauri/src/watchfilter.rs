@@ -51,7 +51,8 @@
 //! itself keeps) and every rule can be unit-tested against a path literal.
 //!
 //! One thing this does *not* fix: the number of directories the OS is asked to
-//! watch. See the README's known limitations, and roadmap Part 11.
+//! watch. See the README's known limitations, and the roadmap's "Watch only what
+//! matters".
 
 use std::collections::hash_map::Entry;
 use std::collections::{BTreeSet, HashMap, HashSet};
