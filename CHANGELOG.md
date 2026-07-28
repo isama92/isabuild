@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.3.0](https://github.com/isama92/isabuild/compare/v0.2.0...v0.3.0) (2026-07-28)
+
+
+### Features
+
+* part 10 — retire Monaco: one editor stack ([#17](https://github.com/isama92/isabuild/issues/17)) ([39c6b0c](https://github.com/isama92/isabuild/commit/39c6b0cce918a675fe3621c3a18778e001488836))
+
 ## [0.2.0](https://github.com/isama92/isabuild/compare/v0.1.0...v0.2.0) (2026-07-26)
 
 
