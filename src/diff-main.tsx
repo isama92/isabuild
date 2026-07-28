@@ -6,6 +6,9 @@ import React from "react";
 import ReactDOM from "react-dom/client";
 import { DiffWindow } from "./diff/DiffWindow";
 import { applyInitialTheme } from "./theme/initialTheme";
+// The shared chrome first: diff.css refines rules this one establishes, so it has
+// to lose to nothing and win over nothing by accident of import order.
+import "./editor/editorWindow.css";
 import "./diff/diff.css";
 
 // Before the first render: every colour in the CSS is a custom property,

@@ -62,6 +62,16 @@ pub struct Settings {
     /// Keybinding **overrides** only, action id to accelerator. An action with
     /// no entry uses its default; an entry mapped to an empty string is unbound.
     pub keybindings: BTreeMap<String, String>,
+    /// Editor-window view **overrides** only, option id to whether it is on.
+    /// Same shape and the same reasoning as [`Self::keybindings`]: the registry
+    /// (`src/editor/viewOptions.ts`) owns the ids and the defaults, so an option
+    /// nobody has touched is absent rather than written out.
+    ///
+    /// An id this crate has never heard of is stored and returned unchanged — it
+    /// is a `BTreeMap<String, bool>`, so there is nothing to validate against.
+    /// Preserving it across a *write* is the frontend's doing, not this type's:
+    /// see `useViewOptions.nextOverrides`.
+    pub view_options: BTreeMap<String, bool>,
     /// Project to reopen on launch. Cleared by Close Project.
     pub last_project: Option<String>,
     /// Most recently opened first, at most [`MAX_RECENT`].
@@ -76,6 +86,7 @@ impl Default for Settings {
             font_family: String::new(),
             font_size: DEFAULT_FONT_SIZE,
             keybindings: BTreeMap::new(),
+            view_options: BTreeMap::new(),
             last_project: None,
             recent_projects: Vec::new(),
         }
@@ -94,6 +105,11 @@ pub struct SettingsPatch {
     /// Replaces the whole override map: the keybindings tab always knows the
     /// full set, and a per-key patch could not express "back to default".
     pub keybindings: Option<BTreeMap<String, String>>,
+    /// Replaces the whole override map, for the same reason as
+    /// [`Self::keybindings`]: a per-option patch could not express "back to
+    /// default". The sender is therefore responsible for the whole intended map,
+    /// including any id it does not recognise — see `useViewOptions.nextOverrides`.
+    pub view_options: Option<BTreeMap<String, bool>>,
 }
 
 impl Settings {
@@ -110,6 +126,9 @@ impl Settings {
         }
         if let Some(bindings) = patch.keybindings {
             self.keybindings = bindings;
+        }
+        if let Some(options) = patch.view_options {
+            self.view_options = options;
         }
     }
 
@@ -397,6 +416,53 @@ mod tests {
         let encoded = serde_json::to_string(&original).expect("encode");
         let decoded: Settings = serde_json::from_str(&encoded).expect("decode");
         assert_eq!(decoded, original);
+    }
+
+    #[test]
+    fn view_options_default_to_empty_and_round_trip() {
+        let mut original = Settings::default();
+        assert!(original.view_options.is_empty());
+        original
+            .view_options
+            .insert("collapse-unchanged".into(), true);
+
+        let encoded = serde_json::to_string(&original).expect("encode");
+        assert!(encoded.contains("viewOptions"));
+        let decoded: Settings = serde_json::from_str(&encoded).expect("decode");
+        assert_eq!(decoded, original);
+    }
+
+    #[test]
+    fn a_file_written_before_view_options_existed_still_loads() {
+        let settings: Settings = serde_json::from_str(
+            r#"{"schemaVersion":1,"theme":"vscode-light","fontSize":16,"keybindings":{}}"#,
+        )
+        .expect("parse");
+        assert!(settings.view_options.is_empty());
+        assert_eq!(settings.font_size, 16);
+    }
+
+    #[test]
+    fn apply_replaces_the_whole_view_option_map() {
+        let mut settings = Settings::default();
+        settings.view_options.insert("gone".into(), true);
+        settings.apply(SettingsPatch {
+            view_options: Some(BTreeMap::from([("collapse-unchanged".into(), true)])),
+            ..SettingsPatch::default()
+        });
+        assert_eq!(
+            settings.view_options,
+            BTreeMap::from([("collapse-unchanged".to_string(), true)]),
+        );
+    }
+
+    #[test]
+    fn a_view_option_this_build_does_not_know_survives_a_load() {
+        // The registry can gain and lose ids across versions; an option a newer
+        // build wrote must not be silently dropped by an older one saving.
+        let settings: Settings =
+            serde_json::from_str(r#"{"viewOptions":{"something-later":true}}"#).expect("parse");
+        assert_eq!(settings.view_options.get("something-later"), Some(&true));
     }
 
     #[test]

@@ -1,48 +1,10 @@
-/* Diff window chrome. Deliberately thin: a header row per pane over a
-   full-height editor, and no options/settings bar (a later part adds one).
-   Every colour is a `--ib-*` token from src/theme/themes, the same source
-   App.css and Monaco's theme read, so all four windows agree by construction
-   rather than by hand-copied palettes staying in step. */
+/* Diff window chrome, on top of editor/editorWindow.css. What is left here is
+   what only the diff window has: two headers that track the panes' divider, the
+   MergeView's own scroll container, and the drag handle. */
 
-html,
-body,
-#root {
-  height: 100%;
-  width: 100%;
-  margin: 0;
-  padding: 0;
-  overflow: hidden;
-}
-
-body {
-  /* Literal fallback, the one in the app: the entry module that writes the
-     custom properties is deferred, so without it the webview paints its own
-     white default for a frame before the theme lands. */
-  background: var(--ib-bg, #1e1e1e);
-}
-
-.diff-window {
-  display: flex;
-  flex-direction: column;
-  height: 100%;
-  min-height: 0;
-  background: var(--ib-bg);
-  color: var(--ib-text);
-  font: 12px/1 system-ui, sans-serif;
-}
-
-/* The two halves line up with the editor panes: the left one is sized from the
-   live width of Monaco's original editor (DiffPane reports it), so dragging the
-   sash moves the header split with it. */
-.diff-header {
-  flex: 0 0 auto;
-  display: flex;
-  height: 28px;
-  background: var(--ib-bg-chrome);
-  border-bottom: 1px solid var(--ib-border);
-  user-select: none;
-}
-
+/* The two halves line up with the editor panes: the left one is sized from where
+   DiffPane reports the divider now sits, so dragging the sash moves the header
+   split with it. */
 .diff-header-side {
   display: flex;
   align-items: center;
@@ -50,6 +12,11 @@ body {
   min-width: 0;
   padding: 0 10px;
   overflow: hidden;
+  /* Load-bearing: DiffPane reports the divider's position as a width, and this is
+     a `flex-basis`. Under the default `content-box` the padding is added on top of
+     it, so the left header would overhang the pane it describes by 20px — enough
+     to read as misaligned, and not enough to look like a bug. */
+  box-sizing: border-box;
 }
 
 .diff-header-side--right {
@@ -76,25 +43,57 @@ body {
   color: var(--ib-deleted);
 }
 
-.diff-body {
-  position: relative;
+.diff-panes {
+  display: flex;
+  flex-direction: column;
   flex: 1 1 auto;
   min-height: 0;
 }
 
+/* The panes and the change strip side by side. `position: relative` because the
+   drag handle is positioned against this box. */
+.diff-editor-row {
+  position: relative;
+  flex: 1 1 auto;
+  display: flex;
+  min-height: 0;
+}
+
+/* The MergeView's own container, and the only thing that scrolls in this window:
+   @codemirror/merge forces `height: auto` and `overflow-y: visible` on both
+   editors so it can align them, and scrolls this wrapper instead. Hence the
+   height here rather than on the editors. */
 .diff-editor {
+  flex: 1 1 auto;
+  min-width: 0;
   height: 100%;
-  width: 100%;
 }
 
-.diff-notice {
-  margin: 0;
-  padding: 10px 12px;
-  color: var(--ib-text-muted);
-  font-size: 12px;
-  line-height: 1.5;
+/* Load-bearing, and not obviously so: **this is what keeps CodeMirror
+   virtualising**. With the editors at `height: auto`, the only element that can
+   clip the viewport is this one, and CodeMirror finds it by walking up for an
+   ancestor that both scrolls (`scrollHeight > clientHeight`) and is not
+   `overflow: visible`. Drop the height and the container grows with its content
+   instead, nothing clips, and a six-thousand-line diff renders every line twice
+   over. */
+.diff-editor .cm-mergeView {
+  height: 100%;
 }
 
-.diff-notice--error {
-  color: var(--ib-deleted);
+/* Sits on the seam between the left pane and the revert column, so a drag never
+   starts on a `»`. Two pixels of visible line, six of grab area. */
+.diff-sash {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 7px;
+  margin-left: -3px;
+  cursor: col-resize;
+  /* Above the panes, below the revert buttons, which are further right. */
+  z-index: 1;
+}
+
+.diff-sash:hover {
+  background: var(--ib-focus);
+  opacity: 0.35;
 }

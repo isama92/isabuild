@@ -1,7 +1,7 @@
 // Turning stored settings into the values the four windows actually render
 // with, and pushing them at the surfaces that cannot read CSS.
 //
-// Three of them cannot: xterm draws to a canvas, Monaco and CodeMirror hold
+// Two of them cannot: xterm draws to a canvas, and CodeMirror holds
 // their own option objects. So there are two halves here — CSS custom
 // properties for everything written in CSS, and an `Appearance` object the
 // editor/terminal modules subscribe to. Both come from the same resolve step,
@@ -92,9 +92,10 @@ export function applyAppearance(root: HTMLElement, appearance: Appearance): void
 
 // --- Subscribers -----------------------------------------------------------
 //
-// xterm, Monaco and CodeMirror each hold their own copy of the font, and each
-// needs a different call to change it. Rather than have this module import all
-// three (and drag Monaco into the main bundle), they register here.
+// xterm and CodeMirror each hold their own copy of the font, and each needs a
+// different call to change it. Rather than have this module import either of them —
+// which would put both editors in every bundle that reads a colour — they register
+// here.
 
 type AppearanceListener = (appearance: Appearance) => void;
 

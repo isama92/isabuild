@@ -12,7 +12,7 @@
 // opened them already knew the theme and puts its id in the URL.
 //
 // It *publishes* rather than merely applying, because the CSS variables are
-// only half the story: xterm, Monaco and CodeMirror seed themselves from
+// only half the story: xterm and CodeMirror seed themselves from
 // `currentAppearance()`, and leaving that null would paint the chrome in the
 // right theme with a dark editor filling most of the window.
 

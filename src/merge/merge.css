@@ -1,51 +1,10 @@
-/* Merge window chrome. Deliberately thin, like diff.css: a header row and a
-   notice strip over the three-pane editor. Every colour is a `--ib-*` token
-   from src/theme/themes, which is also where codemirrorSetup's theme reads its
-   pane tints from, so the chrome and the panes cannot drift apart.
+/* Merge window chrome, on top of editor/editorWindow.css. What is left here is
+   what only the merge window has: the three-pane grid, its pane headers, and the
+   rows of whole-file choices.
 
-   The panes themselves are styled from codemirrorSetup's theme, not from here:
+   The panes themselves are styled from editor/codemirror's theme, not from here:
    CodeMirror scopes its own class names and injects them at runtime, and a
-   stylesheet racing that would be a fight over specificity. What lives here is
-   the grid the three panes sit in and the chrome around them. */
-
-html,
-body,
-#root {
-  height: 100%;
-  width: 100%;
-  margin: 0;
-  padding: 0;
-  overflow: hidden;
-}
-
-body {
-  /* Literal fallback, the one in the app: the entry module that writes the
-     custom properties is deferred, so without it the webview paints its own
-     white default for a frame before the theme lands. */
-  background: var(--ib-bg, #1e1e1e);
-}
-
-.merge-window {
-  display: flex;
-  flex-direction: column;
-  height: 100%;
-  min-height: 0;
-  background: var(--ib-bg);
-  color: var(--ib-text);
-  font: 12px/1.5 system-ui, sans-serif;
-}
-
-.merge-header {
-  flex: 0 0 auto;
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  height: 28px;
-  padding: 0 12px;
-  background: var(--ib-bg-chrome);
-  border-bottom: 1px solid var(--ib-border);
-  user-select: none;
-}
+   stylesheet racing that would be a fight over specificity. */
 
 .merge-header-path {
   overflow: hidden;
@@ -59,22 +18,19 @@ body {
   color: var(--ib-conflict);
 }
 
-.merge-notice {
-  margin: 0;
-  padding: 6px 12px;
-  color: var(--ib-text-muted);
+.merge-header-source {
+  flex: 0 0 auto;
+  color: var(--ib-text-dim);
 }
 
-.merge-notice--error {
-  color: var(--ib-deleted);
+/* The merge header is a padded row of labels, where the diff header is two halves
+   that butt up against the panes' divider. */
+.merge-window .ew-header {
+  gap: 10px;
+  padding: 0 12px;
 }
 
-/* A declined reload: not an error, but the user has to know their buffer is not
-   what is on disk any more. */
-.merge-notice--warn {
-  color: var(--ib-conflict);
-}
-
+/* Part of a sentence in a notice, not a control beside it. */
 .merge-inline-button {
   padding: 0;
   border: none;
@@ -85,52 +41,11 @@ body {
   cursor: pointer;
 }
 
-.merge-header-source {
-  flex: 0 0 auto;
-  color: var(--ib-text-dim);
-}
-
-/* `overflow: hidden`, not auto: the three panes scroll themselves, and an outer
-   scrollbar would move all of them at once and defeat the sync. */
-.merge-body {
-  flex: 1 1 auto;
-  display: flex;
-  flex-direction: column;
-  min-height: 0;
-  overflow: hidden;
-}
-
 .merge-panes {
   display: flex;
   flex-direction: column;
   flex: 1 1 auto;
   min-height: 0;
-}
-
-.merge-toolbar {
-  flex: 0 0 auto;
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  padding: 5px 12px;
-  background: var(--ib-bg-chrome);
-  border-bottom: 1px solid var(--ib-border);
-  user-select: none;
-}
-
-.merge-toolbar-group {
-  display: flex;
-  gap: 6px;
-}
-
-/* Between the two groups, so the current chunk's description takes the slack and
-   the action buttons stay pinned right. */
-.merge-toolbar-current {
-  flex: 1 1 auto;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  color: var(--ib-text-muted);
 }
 
 /* Three equal columns. `minmax(0, 1fr)` rather than `1fr`: a long unwrapped line
@@ -187,31 +102,10 @@ body {
   padding: 8px 0;
 }
 
-/* A row of choices: the toolbar's chunk actions, the divergence banner's two
-   options, and the whole-file buttons for a binary conflict. */
+/* A row of choices: the divergence banner's two options, and the whole-file
+   buttons for a binary conflict. */
 .merge-block-actions {
   display: flex;
   gap: 6px;
   padding: 0 12px;
 }
-
-.merge-choice {
-  padding: 2px 8px;
-  border: 1px solid var(--ib-border-strong);
-  border-radius: 2px;
-  background: var(--ib-bg-button);
-  color: var(--ib-text);
-  font: 12px/1.5 system-ui, sans-serif;
-  white-space: nowrap;
-  cursor: pointer;
-}
-
-.merge-choice:hover:not(:disabled) {
-  background: var(--ib-bg-button-hover);
-}
-
-.merge-choice:disabled {
-  opacity: 0.5;
-  cursor: default;
-}
-

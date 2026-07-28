@@ -1,0 +1,172 @@
+/* Chrome shared by the diff and merge windows: the document reset, the window
+   column, the header row, the notice vocabulary, the toolbar and its buttons.
+
+   Imported by each window's entry module *before* its own stylesheet, so a
+   window-specific rule of equal specificity wins.
+
+   Every colour is a `--ib-*` token from src/theme/themes, which is also where
+   editor/codemirror's theme reads its pane colours, so the chrome and the panes
+   cannot drift apart. The panes themselves are never styled from here:
+   CodeMirror scopes its own class names and injects them at runtime, and a
+   stylesheet racing that would be a fight over specificity. */
+
+html,
+body,
+#root {
+  height: 100%;
+  width: 100%;
+  margin: 0;
+  padding: 0;
+  overflow: hidden;
+}
+
+body {
+  /* Literal fallback, the one in the app: the entry module that writes the
+     custom properties is deferred, so without it the webview paints its own
+     white default for a frame before the theme lands. */
+  background: var(--ib-bg, #1e1e1e);
+}
+
+.ew-window {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+  background: var(--ib-bg);
+  color: var(--ib-text);
+  font: 12px/1.5 system-ui, sans-serif;
+}
+
+.ew-header {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  height: 28px;
+  background: var(--ib-bg-chrome);
+  border-bottom: 1px solid var(--ib-border);
+  user-select: none;
+}
+
+.ew-body {
+  position: relative;
+  flex: 1 1 auto;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  /* `hidden`, not `auto`: the panes scroll themselves, and an outer scrollbar
+     would move a whole window's worth of aligned panes at once. */
+  overflow: hidden;
+}
+
+/* --- notices ------------------------------------------------------------- */
+
+.ew-notice {
+  margin: 0;
+  padding: 6px 12px;
+  color: var(--ib-text-muted);
+}
+
+.ew-notice--error {
+  color: var(--ib-deleted);
+}
+
+/* Not an error, but something the user has to know: a reload declined to protect
+   a buffer, or a diff too large to compute precisely. */
+.ew-notice--warn {
+  color: var(--ib-conflict);
+}
+
+/* --- toolbar ------------------------------------------------------------- */
+
+.ew-toolbar {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 5px 12px;
+  background: var(--ib-bg-chrome);
+  border-bottom: 1px solid var(--ib-border);
+  user-select: none;
+}
+
+.ew-toolbar-group {
+  display: flex;
+  gap: 6px;
+}
+
+/* Takes the slack between groups, so whatever follows stays pinned right. */
+.ew-toolbar-status {
+  flex: 1 1 auto;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--ib-text-muted);
+}
+
+.ew-button {
+  padding: 2px 8px;
+  border: 1px solid var(--ib-border-strong);
+  border-radius: 2px;
+  background: var(--ib-bg-button);
+  color: var(--ib-text);
+  font: 12px/1.5 system-ui, sans-serif;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.ew-button:hover:not(:disabled) {
+  background: var(--ib-bg-button-hover);
+}
+
+.ew-button:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+/* A toggle that is on. Bordered as well as filled: `aria-pressed` carries the
+   state for a screen reader, and a border carries it for anyone who cannot pick
+   the fill out from the resting one. */
+.ew-button--active {
+  border-color: var(--ib-focus);
+  background: var(--ib-bg-button-active);
+  color: var(--ib-text-bright);
+}
+
+/* --- the revert control between the diff panes ---------------------------- */
+
+/* `»`, restoring a block from HEAD into the working file. Styled here rather than
+   from editor/codemirror's theme because `.cm-merge-revert` is a sibling of the
+   two editors, not part of either, so a rule scoped to an editor root could never
+   reach it. @codemirror/merge positions the buttons itself; only the colours are
+   ours. */
+.cm-merge-revert button {
+  color: var(--ib-text-dim);
+  line-height: 1;
+  padding: 0;
+}
+
+.cm-merge-revert button:hover {
+  color: var(--ib-text-bright);
+}
+
+/* --- the overview strip -------------------------------------------------- */
+
+.ew-ruler {
+  position: relative;
+  flex: 0 0 auto;
+  width: 12px;
+  /* The minimum-height floor on a mark near the bottom would otherwise paint a
+     sliver below the strip. */
+  overflow: hidden;
+  background: var(--ib-bg-chrome);
+  border-left: 1px solid var(--ib-border);
+  cursor: pointer;
+}
+
+.ew-ruler-mark {
+  position: absolute;
+  left: 2px;
+  right: 2px;
+  border-radius: 1px;
+  pointer-events: none;
+}

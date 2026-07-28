@@ -10,7 +10,7 @@ A cross-platform desktop app (macOS, Linux, Windows) that embeds Claude Code in 
 - **Frontend**: React 18 + TypeScript + Vite, Zustand, react-resizable-panels
 - **Terminals**: xterm.js + `portable-pty` (ConPTY on Windows)
 - **Git**: system `git` binary via subprocess (porcelain/plumbing output only)
-- **Diff viewer**: Monaco Editor · **Merge editor**: CodeMirror 6
+- **Editors**: CodeMirror 6 (`@codemirror/merge` for the diff panes)
 
 ## Development
 
@@ -34,10 +34,13 @@ Settings live in one JSON file, in the OS's own config directory:
 | macOS | `~/Library/Application Support/com.isabuild.desktop/config.json` |
 | Windows | `%APPDATA%\com.isabuild.desktop\config.json` |
 
-It holds the theme, the monospace font and size, keybinding overrides, and the recent
-projects. Every field is optional, so it is safe to hand-edit down to the one key you care
-about. A file that cannot be parsed is renamed to `config.json.bak` rather than overwritten,
-and the app starts from defaults and says so. Deleting the file resets everything.
+It holds the theme, the monospace font and size, keybinding overrides, the editor windows'
+view options, and the recent projects. Every field is optional, so it is safe to hand-edit
+down to the one key you care about. `keybindings` and `viewOptions` hold **overrides only** —
+an action or an option with no entry uses its default, and an entry that does not make sense
+falls back to the default rather than leaving a dead control. A file that cannot be parsed is
+renamed to `config.json.bak` rather than overwritten, and the app starts from defaults and says
+so. Deleting the file resets everything.
 
 ### Installing a build
 
@@ -185,24 +188,80 @@ Each part is an independent piece of work, executed in order, and its entry belo
   operation in flight across a **project switch** could report against the repo the user had
   just moved to.
 
-- [ ] **Part 10 — Retire Monaco: one editor stack**
-  Replace Part 4's Monaco diff viewer with `@codemirror/merge`, leaving CodeMirror 6 as the only editor in the app.
+- [x] **Part 10 — Retire Monaco: one editor stack**
+  Part 4's Monaco diff viewer is gone, replaced by `@codemirror/merge`, and CodeMirror 6 is
+  now the only editor in the app. Both editor windows sit on a shared shell in `src/editor/`,
+  which is where a view-settings toolbar lives from now on.
 
-  **Why this exists.** Part 7 brought CodeMirror in for the merge editor, so the app now ships *two* full editor stacks doing overlapping jobs: two syntax-highlighting registries, two theme definitions, two sets of test shims, two mental models. `@codemirror/merge`'s `MergeView` already covers most of what Part 4 needs — side-by-side panes, one editable side, built-in revert controls (Part 4's `»` restore-a-block arrow), intra-line highlighting — and it aligns the two documents with **spacer blocks**, which is strictly better than the proportional scroll sync Part 7 settled for.
+  **Why this existed.** Part 7 brought CodeMirror in for the merge editor, so the app shipped
+  *two* full editor stacks doing overlapping jobs: two syntax registries (`lib/diffLanguage.ts`
+  against `lib/cmLanguage.ts`, whose header admitted the duplication), two hand-copied mappings
+  of the same nine syntax roles, two theme definitions, two sets of test shims. `monaco-editor`
+  was 101 MB of `node_modules` against 12 MB for all of CodeMirror and Lezer.
 
-  **Pros**
-  - One editor stack and one highlighting source (`@codemirror/language-data`, already a dependency). `lib/diffLanguage.ts` and its Monaco-registry tests are deleted, and both windows highlight identically *by construction* instead of by coincidence.
-  - Much smaller: `monaco-editor` is 101 MB in `node_modules` against 12 MB for all of CodeMirror and Lezer, with a correspondingly smaller shipped bundle. `diff/monacoSetup.ts`, the editor-worker wiring, and the `vite.config.ts` gymnastics that keep Monaco out of the main bundle all go with it.
-  - Spacer-block alignment becomes available to the *merge* editor too, retiring Part 7's "the panes drift apart in a long file" limitation.
-  - Removes the only path by which the `dompurify` advisory reaches this project.
+  **What replaced it.** `MergeView` gives the two panes, per-pane line numbers, intra-line
+  highlighting, an editable right side, and Part 4's `»` (`revertControls: "a-to-b"`). It also
+  aligns the two documents with **spacer blocks**, which is better than the filler lines Monaco
+  managed. `diff/monacoSetup.ts`, `lib/diffLanguage.ts`, `lib/diffMarkers.ts` and the app's only
+  `?worker` import are deleted; `npm audit` reports **0 vulnerabilities**, because the `dompurify`
+  advisory arrived with Monaco and left with it.
 
-  **Cons — the real cost; do not start without budgeting for these**
-  - **CodeMirror has no overview ruler.** "Green for added, blue for changed, red for removed, at the height of each change" is a Part 4 acceptance criterion that Monaco gave us for free. It becomes our own widget (a positioned strip beside the scroller, heights from the chunk list) plus tests, and `lib/diffMarkers.ts` gets rewritten around CodeMirror chunks instead of Monaco's `getLineChanges()`.
-  - **The diff moves onto the main thread.** Monaco computes it in the one worker it loads; `@codemirror/merge` computes it inline, so a few-thousand-line file may hitch when its window opens. **Measure this first** — if it is bad, the migration also needs a worker of our own and most of the simplification evaporates.
-  - The draggable sash between the panes, and the `ResizeObserver` that keeps the headers tracking it, have to be rebuilt (probably *simpler* with `react-resizable-panels`, already a dependency).
-  - Part 4's whole acceptance list needs re-verifying on all three OSes, including the auto-save and `shouldAdoptDiskContent` dance — subtle, and currently correct.
+  **The shared shell**, `src/editor/`, is the other half of the part and the reason it is worth
+  more than a dependency swap. Both windows had independently grown the same six effects — parse
+  the target out of the query string, follow the appearance settings, set the title, close on
+  Escape, close on Ctrl/Cmd+W, follow `repo://changed`, intercept their own close — plus sixteen
+  byte-identical lines of CSS and two spellings of the same notice. Those are now
+  `useEditorWindow`, `EditorWindow` and `editorWindow.css`. `EditorToolbar` renders a declarative
+  item list, and `viewOptions.ts` is a registry shaped exactly like `keybindings.ts`'s
+  `ACTIONS`/`resolveBindings` pair: **a new toolbar button is one entry there plus one handler in
+  whichever pane implements it**, with no window chrome touched. Its first entry is the diff
+  window's **Compact** toggle, which hides long runs of unchanged lines; it persists in
+  `config.json` under `viewOptions`, so every diff window opens the way the last one was left,
+  and a toggle in one window reaches the others through `settings://changed`.
 
-  **Do not do this for security.** The `dompurify` advisory that arrives with Monaco is closed on its own by a `"dompurify": "^3.4.12"` entry in `package.json`'s `overrides` (Monaco pins `3.4.8` exactly, which is why npm cannot lift it unaided). Its vulnerable paths are rendered-markdown sanitising for hovers and suggestion docs, and `monacoSetup.ts` already excludes the worker-backed language services that would produce any — so the exposure here is theoretical. Do this part for the one-stack simplification and the bundle size, or leave it undone.
+  Also new, because the shell made them cheap: **find** (`@codemirror/search`, diff panes only —
+  the merge panes stay deliberately minimal), and **Previous/Next change** with two rebindable
+  actions in the `diff` scope.
+
+  **What the measurements changed.** The roadmap's worry about the diff moving onto the main
+  thread was justified, but it pointed at the wrong knob. Unbounded, `Chunk.build` took 5.2 s on a
+  dense 6,000-line diff and over five minutes on two unrelated files of that size. Worse,
+  `MergeView`'s *documented default* — `diffConfig: {scanLimit: 500}` — is unusable here: the
+  limit is counted in **characters**, so any residual range over 16,000 of them returns a single
+  chunk covering the whole file, by a code path that still reports `precise: true`. A 2,273-line
+  file with 53 scattered edits came back as one chunk. `timeout: 250` is the bound that behaves:
+  it falls back to the package's coarse matcher, which *does* set `precise: false`, so the window
+  can say the diff is approximate rather than let it pass for exact. Realistic files land at
+  0.3–91 ms; the pathological ones at about half a second.
+
+  **The change map is ours**, since CodeMirror has no overview ruler. `lib/diffStripes.ts` is the
+  arithmetic and `editor/OverviewRuler` the strip. Geometry is **measured** from the live view
+  rather than counted in lines, because with spacers above a chunk and unchanged stretches
+  possibly collapsed below it, a chunk's height on screen is not a function of its line numbers —
+  turn Compact on and every mark moves. The measuring is confined to an adapter and the geometry
+  is injected, so the classification, the minimum-height floor and the hit-testing still unit-test
+  against a fake.
+
+  **Two things worth knowing before touching this code**, both surprising and both load-bearing:
+  - **The editors do not scroll; the `MergeView` container does.** The package forces
+    `height: auto` and `overflow-y: visible` on both editors so it can align them. That is also
+    what keeps CodeMirror virtualising — it clips its viewport against the nearest scrolling
+    ancestor, so `.cm-mergeView { height: 100% }` in `diff.css` is what stops a 6,000-line diff
+    rendering every line twice. Verified: 64 lines of DOM per pane for a 6,000-line file.
+  - **The HEAD pane is read-only but still focusable.** `EditorState.readOnly` refuses input;
+    `EditorView.editable` only decides whether a pane can be focused at all. Turning the second
+    one off as well — which the merge window's side panes do — silently kills Ctrl+F in the HEAD
+    pane, because a keystroke never reaches a pane that cannot take focus.
+
+  The draggable sash is rebuilt by hand (`MergeView` exposes no divider): a handle on the seam
+  between the left pane and the revert column, setting `flex-grow` on the two editor wrappers.
+  Safe behind the package's back only because line wrapping is off in these panes, so width
+  cannot change any line's height and nothing it measured for the alignment goes stale.
+
+  **Not done here, and no longer claimed:** spacer alignment does *not* become available to the
+  merge editor. Alignment lives inside the `MergeView` class, is not an exported extension, and
+  `MergeView` is strictly two documents — so a 3-pane merge cannot be one. Part 7's "the panes
+  drift apart in a long file" limitation stands; see Part 12.
 
 - [ ] **Part 11 — Watch only what matters**
   Stop asking the OS to watch directories the filter is only going to discard.
@@ -225,6 +284,39 @@ Each part is an independent piece of work, executed in order, and its entry belo
   **Also worth folding in**, since it needs the same code: the arming replay. Watching
   recursively today reports every path it discovers as a synthetic event, so opening a project
   spends a burst of `check-ignore` batches learning what it could have learned during the walk.
+
+- [ ] **Part 12 — Align the merge panes**
+  Give ours | result | theirs the vertical alignment the diff panes now have, and retire the
+  proportional scroll sync.
+
+  **Why this exists.** Part 10 was expected to hand this over for free and did not:
+  `@codemirror/merge` aligns two documents with spacer blocks, but the aligner lives inside the
+  `MergeView` class rather than being an exported extension, and a `MergeView` is strictly two
+  documents — so the three-pane merge editor cannot be one. Part 7's limitation therefore stands:
+  the panes are synchronised in proportion (`lib/paneScroll.ts`), not aligned, so they drift apart
+  in a long file and next/previous conflict is the only reliable way to move between chunks.
+
+  **What it needs.** Our own spacer widgets, from a chunk model we already have: Rust hands over
+  each chunk's span in all four coordinate systems (base, ours, theirs, result), so the padding
+  each pane needs at each chunk boundary is arithmetic over three line-range lists — pure, and
+  unit-testable the way `mergeChunks.ts` already is. The insertion itself is a block widget per
+  pane, which `MergePanes` is already the right shape for. When it lands, `lib/paneScroll.ts` and
+  its twelve tests go, along with the `syncing` flag and the per-scroller listeners.
+
+  **Also worth folding in**, because it becomes meaningful only once the panes align: the change
+  map. `editor/OverviewRuler` is already window-agnostic and takes measured geometry, so the merge
+  window can hang one beside its panes — but a shared vertical scale says nothing until the three
+  panes agree on one.
+
+- [ ] auto update
+- [ ] help menu with `check for update` and `about` pages
+- [ ] view menu with theme selector and zoom
+- [ ] have files opening in place of claude code instead of opening in a new window (it should be faster)
+- [ ] more code-window view settings (compacting unchanged rows landed in Part 10; the toolbar
+      and its registry are in `src/editor/viewOptions.ts`, so each new one is an entry plus a handler)
+- [ ] ctrl+arrows to move between spaces
+- [ ] when a tool (terminal or git) is closed with shortcut  (eg. alt+1), move focus on claude
+- [ ] allow doing ctrl+backspace to remove a word in therminal or claude
 
 ## Global decisions
 

@@ -19,13 +19,11 @@
 //   anywhere, so the close is intercepted and confirmed. This is what `merge.json`
 //   needs `core:window:allow-destroy` for.
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { getCurrentWindow } from "@tauri-apps/api/window";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { MergePanes } from "./MergePanes";
+import { EditorWindow, type Notice } from "../editor/EditorWindow";
+import { useEditorWindow, type WindowTarget } from "../editor/useEditorWindow";
 import { binaryConflictActions } from "../lib/conflictView";
-import { onRepoChanged } from "../lib/gitStatus";
-import { useAppearanceSync } from "../hooks/useAppearance";
-import { useWindowKeybindings } from "../hooks/useWindowKeybindings";
 import { countConflictMarkers } from "../lib/mergeChunks";
 import {
   getConflictStages,
@@ -48,22 +46,9 @@ function isMergeable(stages: ConflictStages): boolean {
 }
 
 export function MergeWindow() {
-  // Reads the settings, follows other windows' changes, and pushes the font at
-  // the CSS variables and the CodeMirror panes.
-  useAppearanceSync();
-
-  // The target never changes for the life of the window.
-  const target = useMemo<{ params?: MergeParams; error?: string }>(() => {
-    try {
-      return { params: parseMergeParams(window.location.search) };
-    } catch (error) {
-      return { error: error instanceof Error ? error.message : String(error) };
-    }
-  }, []);
-
   const [stages, setStages] = useState<ConflictStages | null>(null);
-  const [phase, setPhase] = useState<Phase>(target.error ? "error" : "loading");
-  const [error, setError] = useState<string | null>(target.error ?? null);
+  const [phase, setPhase] = useState<Phase>("loading");
+  const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   /** The result buffer. Null until a source has been chosen. */
@@ -155,48 +140,50 @@ export function MergeWindow() {
     setSource("rebuild");
   }, []);
 
-  const load = useCallback(() => {
-    if (!target.params) return;
-    void getConflictStages(target.params.repoRoot, target.params.path).then(
-      adopt,
-      (cause: unknown) => {
+  const load = useCallback(
+    (params: MergeParams) => {
+      void getConflictStages(params.repoRoot, params.path).then(adopt, (cause: unknown) => {
         setPhase("error");
         setError(cause instanceof Error ? cause.message : String(cause));
-      },
-    );
-  }, [adopt, target.params]);
+      });
+    },
+    [adopt],
+  );
+
+  // Annotated rather than inferred: the callbacks below read `target` to find out
+  // which file they are acting on, and without the annotation that self-reference
+  // leaves TypeScript inferring `any` for the whole thing.
+  const target: WindowTarget<MergeParams> = useEditorWindow<MergeParams>({
+    scope: "merge",
+    parse: parseMergeParams,
+    titlePrefix: "Conflicts",
+    pathOf: (params) => params.path,
+    // Follow the file: the same watcher event the Status panel refreshes on. Our
+    // own write comes back through here too, which is how the panes end up showing
+    // the resolved state without an optimistic update to get wrong.
+    onRepoEvent: () => {
+      if (target.params) load(target.params);
+    },
+    // Closing with work outstanding has to ask: the buffer is not on disk anywhere,
+    // so it goes with the window.
+    onCloseRequest: () => {
+      if (!touchedRef.current || bufferRef.current === null) return true;
+      if (countConflictMarkers(bufferRef.current) === 0) return true;
+      // A promise rather than the bare boolean, deliberately: that is what makes
+      // the hook intercept the close and `destroy` the window, where a plain
+      // `close` would re-enter this same handler. The dialog itself still opens
+      // synchronously, during the event.
+      return Promise.resolve(
+        window.confirm(
+          "This file still has unresolved conflicts, and the changes in this window have not been written anywhere. Close and lose them?",
+        ),
+      );
+    },
+  });
 
   useEffect(() => {
-    load();
-  }, [load]);
-
-  // Follow the file: the same watcher event the Status panel refreshes on. Our own
-  // write comes back through here too, which is how the panes end up showing the
-  // resolved state without an optimistic update to get wrong.
-  useEffect(() => {
-    if (!target.params) return;
-    let unlisten: (() => void) | undefined;
-    let cancelled = false;
-    void onRepoChanged(() => {
-      load();
-    }).then((handle) => {
-      if (cancelled) {
-        handle();
-        return;
-      }
-      unlisten = handle;
-    });
-    return () => {
-      cancelled = true;
-      unlisten?.();
-    };
+    if (target.params) load(target.params);
   }, [load, target.params]);
-
-  useEffect(() => {
-    if (target.params) {
-      document.title = `Conflicts: ${target.params.path}`;
-    }
-  }, [target.params]);
 
   const handleChange = useCallback((text: string) => {
     bufferRef.current = text;
@@ -247,57 +234,6 @@ export function MergeWindow() {
     void commit(buffer);
   }, [buffer, busy, commit, outstanding]);
 
-  // Closing with work outstanding has to ask: the buffer is not on disk anywhere,
-  // so it goes with the window. `destroy` rather than `close` on the way through,
-  // or this handler would just run again.
-  useEffect(() => {
-    const appWindow = getCurrentWindow();
-    let unlisten: (() => void) | undefined;
-    let cancelled = false;
-    void appWindow
-      .onCloseRequested(async (event) => {
-        if (!touchedRef.current || bufferRef.current === null) return;
-        if (countConflictMarkers(bufferRef.current) === 0) return;
-        event.preventDefault();
-        const discard = window.confirm(
-          "This file still has unresolved conflicts, and the changes in this window have not been written anywhere. Close and lose them?",
-        );
-        if (discard) await appWindow.destroy();
-      })
-      .then((handle) => {
-        if (cancelled) {
-          handle();
-          return;
-        }
-        unlisten = handle;
-      });
-    return () => {
-      cancelled = true;
-      unlisten?.();
-    };
-  }, []);
-
-  // Close-window comes from the settings (default Escape), matching the diff
-  // window; Ctrl/Cmd+W stays hardcoded as an OS convention. Bubble phase and
-  // skipped once something else has handled the key — CodeMirror's own keymap
-  // runs first.
-  useWindowKeybindings("merge", {
-    "close-window": () => void getCurrentWindow().close(),
-  });
-
-  useEffect(() => {
-    function onKeyDown(event: KeyboardEvent) {
-      if (event.defaultPrevented) return;
-      if (!(event.ctrlKey || event.metaKey)) return;
-      if (event.key.toLowerCase() === "w") {
-        event.preventDefault();
-        void getCurrentWindow().close();
-      }
-    }
-    window.addEventListener("keydown", onKeyDown);
-    return () => window.removeEventListener("keydown", onKeyDown);
-  }, []);
-
   async function chooseWholeFile(resolution: PathResolution) {
     if (!target.params || busy) return;
     setBusy(true);
@@ -310,7 +246,7 @@ export function MergeWindow() {
       setError(cause instanceof Error ? cause.message : String(cause));
     } finally {
       setBusy(false);
-      load();
+      load(target.params);
     }
   }
 
@@ -335,141 +271,153 @@ export function MergeWindow() {
   const needsSource =
     phase === "ready" && stages !== null && isMergeable(stages) && buffer === null;
 
-  return (
-    <div className="merge-window">
-      <div className="merge-header">
-        <span className="merge-header-path">{target.params?.path ?? "No file"}</span>
-        {buffer !== null && (
-          <span className="merge-header-count">
-            {outstanding === 0
-              ? "no conflicts left"
-              : `${outstanding} ${outstanding === 1 ? "conflict" : "conflicts"} to decide`}
-          </span>
-        )}
-        {source === "disk" && (
-          <span className="merge-header-source">opened from the file on disk</span>
-        )}
-      </div>
+  const loadError = target.error ?? error;
+  const failed = target.error !== undefined || phase === "error";
 
-      {error !== null && (
-        <p className="merge-notice merge-notice--error" role="alert">
-          {error}
-        </p>
-      )}
-      {notice !== null && <p className="merge-notice">{notice}</p>}
-      {staleOnDisk && (
-        // Declined a reload rather than clobbering the buffer. Saying so and
-        // offering the reload is the honest version of "we ignored that".
-        <p className="merge-notice merge-notice--warn" role="status">
+  const notices: Notice[] = [];
+  if (loadError !== null && loadError !== undefined) {
+    notices.push({ id: "error", tone: "error", text: loadError });
+  }
+  if (notice !== null) {
+    notices.push({ id: "notice", tone: "info", text: notice });
+  }
+  if (staleOnDisk) {
+    // Declined a reload rather than clobbering the buffer. Saying so and offering
+    // the reload is the honest version of "we ignored that".
+    notices.push({
+      id: "stale",
+      tone: "warn",
+      text: (
+        <>
           This file changed on disk while you were working on it.{" "}
           <button
             type="button"
             className="merge-inline-button"
             onClick={() => {
               touchedRef.current = false;
-              load();
+              if (target.params) load(target.params);
             }}
           >
             Reload it
           </button>{" "}
           to start from what is there now, or carry on and your version will be written.
-        </p>
+        </>
+      ),
+    });
+  }
+
+  return (
+    <EditorWindow
+      className="merge-window"
+      notices={notices}
+      header={
+        <>
+          <span className="merge-header-path">{target.params?.path ?? "No file"}</span>
+          {buffer !== null && (
+            <span className="merge-header-count">
+              {outstanding === 0
+                ? "no conflicts left"
+                : `${outstanding} ${outstanding === 1 ? "conflict" : "conflicts"} to decide`}
+            </span>
+          )}
+          {source === "disk" && (
+            <span className="merge-header-source">opened from the file on disk</span>
+          )}
+        </>
+      }
+    >
+      {!failed && phase === "loading" && <p className="ew-notice">Loading conflicts…</p>}
+
+      {needsSource && stages !== null && (
+        <div className="merge-whole-file">
+          <p className="ew-notice">
+            This file changed since git wrote it — something edited it outside this window. Pick
+            which version to work from.
+          </p>
+          <div className="merge-block-actions">
+            <button
+              type="button"
+              className="ew-button"
+              title="Keep the edits already in the file and resolve what is left"
+              onClick={() => chooseSource("disk")}
+            >
+              Use the file on disk
+            </button>
+            <button
+              type="button"
+              className="ew-button"
+              title="Discard those edits and rebuild the merge from git's three versions"
+              onClick={() => chooseSource("rebuild")}
+            >
+              Start over from the merge
+            </button>
+          </div>
+        </div>
       )}
 
-      <div className="merge-body">
-        {phase === "loading" && <p className="merge-notice">Loading conflicts…</p>}
-
-        {needsSource && stages !== null && (
-          <div className="merge-whole-file">
-            <p className="merge-notice">
-              This file changed since git wrote it — something edited it outside this window. Pick
-              which version to work from.
-            </p>
+      {wholeFileOnly && stages !== null && (
+        <div className="merge-whole-file">
+          <p className="ew-notice">
+            {stages.binary
+              ? "This file is binary, so there is nothing to merge line by line. Keep one side of it whole."
+              : "Only one side of this file has any content, so there is nothing to merge line by line. Keep a whole side, or accept the deletion, from the Status panel."}
+          </p>
+          {stages.binary && (
             <div className="merge-block-actions">
-              <button
-                type="button"
-                className="merge-choice"
-                title="Keep the edits already in the file and resolve what is left"
-                onClick={() => chooseSource("disk")}
-              >
-                Use the file on disk
-              </button>
-              <button
-                type="button"
-                className="merge-choice"
-                title="Discard those edits and rebuild the merge from git's three versions"
-                onClick={() => chooseSource("rebuild")}
-              >
-                Start over from the merge
-              </button>
+              {binaryConflictActions().map((action) => (
+                <button
+                  key={action.resolution}
+                  type="button"
+                  className="ew-button"
+                  disabled={busy}
+                  title={action.title}
+                  onClick={() => void chooseWholeFile(action.resolution)}
+                >
+                  {action.label}
+                </button>
+              ))}
             </div>
-          </div>
-        )}
+          )}
+        </div>
+      )}
 
-        {wholeFileOnly && stages !== null && (
-          <div className="merge-whole-file">
-            <p className="merge-notice">
-              {stages.binary
-                ? "This file is binary, so there is nothing to merge line by line. Keep one side of it whole."
-                : "Only one side of this file has any content, so there is nothing to merge line by line. Keep a whole side, or accept the deletion, from the Status panel."}
-            </p>
-            {stages.binary && (
-              <div className="merge-block-actions">
-                {binaryConflictActions().map((action) => (
-                  <button
-                    key={action.resolution}
-                    type="button"
-                    className="merge-choice"
-                    disabled={busy}
-                    title={action.title}
-                    onClick={() => void chooseWholeFile(action.resolution)}
-                  >
-                    {action.label}
-                  </button>
-                ))}
-              </div>
-            )}
+      {resolvedElsewhere && (
+        // Deliberately not self-closing. The window is closed by the person who
+        // opened it: an OS window vanishing on its own reads as a crash, and
+        // after an abort this is also how you find out the conflict is gone.
+        <div className="merge-whole-file">
+          <p className="ew-notice">
+            git no longer reports this file as conflicted — it has been resolved and staged, here
+            or somewhere else.
+          </p>
+          {/* Still offered, because a file resolved by hand outside the app can
+              reach this state with the working tree edited but nothing staged. */}
+          <div className="merge-block-actions">
+            <button
+              type="button"
+              className="ew-button"
+              disabled={busy}
+              title="Stage this file exactly as it is now"
+              onClick={() => void chooseWholeFile("markResolved")}
+            >
+              Mark resolved
+            </button>
           </div>
-        )}
+        </div>
+      )}
 
-        {resolvedElsewhere && (
-          // Deliberately not self-closing. The window is closed by the person who
-          // opened it: an OS window vanishing on its own reads as a crash, and
-          // after an abort this is also how you find out the conflict is gone.
-          <div className="merge-whole-file">
-            <p className="merge-notice">
-              git no longer reports this file as conflicted — it has been resolved and staged, here
-              or somewhere else.
-            </p>
-            {/* Still offered, because a file resolved by hand outside the app can
-                reach this state with the working tree edited but nothing staged. */}
-            <div className="merge-block-actions">
-              <button
-                type="button"
-                className="merge-choice"
-                disabled={busy}
-                title="Stage this file exactly as it is now"
-                onClick={() => void chooseWholeFile("markResolved")}
-              >
-                Mark resolved
-              </button>
-            </div>
-          </div>
-        )}
-
-        {phase === "ready" && stages !== null && buffer !== null && (
-          // Keyed on the revision so a reload we adopted rebuilds the editors
-          // rather than patching four coordinate systems in place.
-          <MergePanes
-            key={`${stages.revision}-${source}`}
-            path={stages.path}
-            stages={stages}
-            value={buffer}
-            onChange={handleChange}
-            busy={busy}
-          />
-        )}
-      </div>
-    </div>
+      {phase === "ready" && stages !== null && buffer !== null && (
+        // Keyed on the revision so a reload we adopted rebuilds the editors
+        // rather than patching four coordinate systems in place.
+        <MergePanes
+          key={`${stages.revision}-${source}`}
+          path={stages.path}
+          stages={stages}
+          value={buffer}
+          onChange={handleChange}
+          busy={busy}
+        />
+      )}
+    </EditorWindow>
   );
 }

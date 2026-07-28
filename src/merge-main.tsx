@@ -6,6 +6,8 @@ import React from "react";
 import ReactDOM from "react-dom/client";
 import { MergeWindow } from "./merge/MergeWindow";
 import { applyInitialTheme } from "./theme/initialTheme";
+// The shared chrome first: merge.css refines rules this one establishes.
+import "./editor/editorWindow.css";
 import "./merge/merge.css";
 
 // Before the first render: every colour in the CSS is a custom property,

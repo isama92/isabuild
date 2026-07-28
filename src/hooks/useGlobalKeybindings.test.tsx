@@ -20,6 +20,7 @@ function settings(keybindings: Record<string, string> = {}): Settings {
     fontFamily: "",
     fontSize: 14,
     keybindings,
+    viewOptions: {},
     lastProject: null,
     recentProjects: [],
   };

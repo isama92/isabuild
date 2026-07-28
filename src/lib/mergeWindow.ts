@@ -3,7 +3,7 @@
 // conflicted file, deduped by label.
 //
 // A separate window (and a separate document, merge.html) rather than a mode of
-// the diff window: the diff window is HEAD against the working tree on Monaco,
+// the diff window: the diff window is HEAD against the working tree,
 // and Part 7 replaces this one's single pane with a 3-pane CodeMirror editor
 // without touching that.
 

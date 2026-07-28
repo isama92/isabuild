@@ -1,10 +1,9 @@
-// The three-pane merge editor: ours | result | theirs, and the only module that
-// touches CodeMirror.
+// The three-pane merge editor: ours | result | theirs.
 //
-// The counterpart of diff/DiffPane, which is likewise the only module that touches
-// Monaco. Keeping each editor library behind exactly one component is what let
-// Part 4's Monaco window and this one coexist without either's setup leaking into
-// the other's tests.
+// The counterpart of diff/DiffPane. Both build their editors from editor/codemirror
+// and put their buttons through editor/EditorToolbar; what differs is that this one
+// resolves a conflict from git's index stages while that one shows a diff, so the
+// chunk model here is git's rather than a computed one.
 //
 // Four things worth knowing:
 //
@@ -18,8 +17,10 @@
 //   typed above them. What is *not* remembered is where the newline goes — see
 //   `lineAlignedEdit`.
 // - **Panes are synchronised proportionally, not aligned.** No filler blocks are
-//   inserted (see the plan's known limits), so the panes drift apart in a long
-//   file — which is what makes next/previous conflict the primary way to move.
+//   inserted — the diff window gets those from `@codemirror/merge`, which cannot
+//   help here because a MergeView is strictly two documents — so the panes drift
+//   apart in a long file, which is what makes next/previous conflict the primary way
+//   to move. README's Part 12 is the fix.
 // - **This component is remounted, not updated, when the file is reloaded.** The
 //   window keys it on the stages' revision, and only ever hands over new stages it
 //   has decided to adopt — so a reload it declined, to protect a touched buffer,
@@ -40,7 +41,7 @@ import {
   keymap,
   type DecorationSet,
 } from "@codemirror/view";
-import { defaultKeymap, history, historyKeymap } from "@codemirror/commands";
+import { history, historyKeymap } from "@codemirror/commands";
 import { languages } from "@codemirror/language-data";
 import { languageForPath } from "../lib/cmLanguage";
 import { currentAppearance, onAppearance } from "../lib/appearance";
@@ -63,7 +64,15 @@ import {
   type ChunkSide,
   type TrackedChunk,
 } from "../lib/mergeChunks";
-import { paneExtensions, readOnlyExtensions, themeTransaction } from "./codemirrorSetup";
+import {
+  PANE_KEYMAP,
+  paneExtensions,
+  readOnlyExtensions,
+  themeTransaction,
+} from "../editor/codemirror";
+import { EditorToolbar, type ToolbarItem } from "../editor/EditorToolbar";
+import { useViewOptions } from "../editor/useViewOptions";
+import { viewOptionItems } from "../editor/viewOptions";
 import type { ConflictStages } from "../lib/gitMerge";
 
 export interface MergePanesProps {
@@ -179,6 +188,7 @@ export function MergePanes({ path, stages, value, onChange, busy }: MergePanesPr
   const views = useRef<Partial<Record<PaneName, EditorView>>>({});
   const tracked = useRef<StateField<TrackedChunk[]> | null>(null);
   const [currentChunk, setCurrentChunk] = useState<number | null>(null);
+  const { state: viewOptions, toggle: toggleViewOption } = useViewOptions();
 
   // Values that only seed the editors, and callbacks their own listeners reach
   // for, read through refs so they are not effect dependencies that would tear an
@@ -246,6 +256,22 @@ export function MergePanes({ path, stages, value, onChange, busy }: MergePanesPr
     });
     view.focus();
   }, []);
+
+  /**
+   * `apply` against whatever chunk the cursor is in.
+   *
+   * A named handler rather than an arrow inside the toolbar's item list: `apply`
+   * reads refs, and the lint rule cannot tell a callback stored in a data structure
+   * from one called during render. Closing over `currentChunk` here keeps the
+   * distinction visible instead of suppressed.
+   */
+  const applyToCurrent = useCallback(
+    (side: ChunkSide) => {
+      if (currentChunk === null) return;
+      apply(currentChunk, side);
+    },
+    [apply, currentChunk],
+  );
 
   const goToConflict = useCallback(
     (direction: "next" | "previous") => {
@@ -333,7 +359,9 @@ export function MergePanes({ path, stages, value, onChange, busy }: MergePanesPr
           field,
           markerHighlight,
           history(),
-          keymap.of([...defaultKeymap, ...historyKeymap]),
+          // Not `defaultKeymap`: see PANE_KEYMAP for the keystroke that would
+          // otherwise reorder the result buffer instead of moving between conflicts.
+          keymap.of([...PANE_KEYMAP, ...historyKeymap]),
           EditorView.updateListener.of((update) => {
             if (update.docChanged) {
               changeRef.current(update.state.doc.toString());
@@ -389,7 +417,7 @@ export function MergePanes({ path, stages, value, onChange, busy }: MergePanesPr
 
   // Appearance changes reach the panes two different ways.
   //
-  // The *font* arrives through CSS custom properties (see codemirrorSetup's
+  // The *font* arrives through CSS custom properties (see editor/codemirror's
   // theme), so it needs no transaction at all — but CodeMirror caches the
   // character width it measured at startup, and a stale cache puts the cursor,
   // the chunk gutter arrows and the scroll sync at the wrong offsets, so each
@@ -441,78 +469,95 @@ export function MergePanes({ path, stages, value, onChange, busy }: MergePanesPr
   const actions = chunk ? actionsFor(chunk.kind) : null;
   const remaining = useMemo(() => countConflictMarkers(value), [value]);
 
+  /**
+   * The toolbar, as items for the shared component.
+   *
+   * Built here rather than by the window because every one of them needs the live
+   * result view — the same reason the conflict keybindings are registered here.
+   * `viewOptionItems` is what a shared button would come in through; the merge
+   * window offers none yet, so it contributes nothing and the array is just the
+   * chunk actions.
+   *
+   * One `react-hooks/refs` suppression below, on the line that needs it. `apply`
+   * reads the live views out of refs, which is correct — they are not render inputs
+   * — and the rule cannot tell a callback *stored* in a data structure from one
+   * *called* during render. It does not fire on DiffPane's equivalent item list, so
+   * an item list is not by itself what trips it; reaching a ref through two hops
+   * inside a `.map()` callback is.
+   */
+  const items = useMemo<ToolbarItem[]>(
+    () => [
+      {
+        kind: "group",
+        id: "navigate",
+        items: [
+          {
+            kind: "button",
+            id: "previous-conflict",
+            label: "◂ Previous",
+            tooltip: "Scroll to the previous conflict",
+            disabled: remaining === 0,
+            onSelect: () => goToConflict("previous"),
+          },
+          {
+            kind: "button",
+            id: "next-conflict",
+            label: "Next ▸",
+            tooltip: "Scroll to the next conflict",
+            disabled: remaining === 0,
+            onSelect: () => goToConflict("next"),
+          },
+        ],
+      },
+      {
+        kind: "status",
+        id: "current",
+        text: chunk
+          ? `Chunk ${(currentChunk ?? 0) + 1} of ${chunks.length} — ${chunkLabel(chunk.kind)}`
+          : "No chunk selected",
+      },
+      // Every chunk is actionable, not only conflicts: taking the base is how a
+      // change git applied for you gets rejected, and taking the other side is how
+      // it gets replaced. A side the chunk already holds is never offered.
+      {
+        kind: "group",
+        id: "resolve",
+        items: (
+          [
+            ["ours", "Take mine", "Replace this chunk with your version"],
+            ["theirs", "Take theirs", "Replace this chunk with their version"],
+            ["both", "Take both", "Keep your lines followed by theirs"],
+            ["base", "Revert to base", "Discard both sides' changes to this chunk"],
+          ] as const
+        ).map(([side, label, tooltip]) => ({
+          kind: "button" as const,
+          id: side,
+          label,
+          tooltip,
+          disabled: busy || !actions?.[side],
+          // eslint-disable-next-line react-hooks/refs -- a click handler, not a render-time read
+          onSelect: () => applyToCurrent(side),
+        })),
+      },
+      ...viewOptionItems("merge", viewOptions, toggleViewOption, busy),
+    ],
+    [
+      actions,
+      applyToCurrent,
+      busy,
+      chunk,
+      chunks.length,
+      currentChunk,
+      goToConflict,
+      remaining,
+      toggleViewOption,
+      viewOptions,
+    ],
+  );
+
   return (
     <div className="merge-panes">
-      <div className="merge-toolbar">
-        <div className="merge-toolbar-group">
-          <button
-            type="button"
-            className="merge-choice"
-            disabled={remaining === 0}
-            title="Scroll to the previous conflict"
-            onClick={() => goToConflict("previous")}
-          >
-            ◂ Previous
-          </button>
-          <button
-            type="button"
-            className="merge-choice"
-            disabled={remaining === 0}
-            title="Scroll to the next conflict"
-            onClick={() => goToConflict("next")}
-          >
-            Next ▸
-          </button>
-        </div>
-
-        <span className="merge-toolbar-current">
-          {chunk
-            ? `Chunk ${(currentChunk ?? 0) + 1} of ${chunks.length} — ${chunkLabel(chunk.kind)}`
-            : "No chunk selected"}
-        </span>
-
-        {/* Every chunk is actionable, not only conflicts: taking the base is how a
-            change git applied for you gets rejected, and taking the other side is
-            how it gets replaced. A side the chunk already holds is never offered. */}
-        <div className="merge-toolbar-group">
-          <button
-            type="button"
-            className="merge-choice"
-            disabled={busy || !actions?.ours}
-            title="Replace this chunk with your version"
-            onClick={() => currentChunk !== null && apply(currentChunk, "ours")}
-          >
-            Take mine
-          </button>
-          <button
-            type="button"
-            className="merge-choice"
-            disabled={busy || !actions?.theirs}
-            title="Replace this chunk with their version"
-            onClick={() => currentChunk !== null && apply(currentChunk, "theirs")}
-          >
-            Take theirs
-          </button>
-          <button
-            type="button"
-            className="merge-choice"
-            disabled={busy || !actions?.both}
-            title="Keep your lines followed by theirs"
-            onClick={() => currentChunk !== null && apply(currentChunk, "both")}
-          >
-            Take both
-          </button>
-          <button
-            type="button"
-            className="merge-choice"
-            disabled={busy || !actions?.base}
-            title="Discard both sides' changes to this chunk"
-            onClick={() => currentChunk !== null && apply(currentChunk, "base")}
-          >
-            Revert to base
-          </button>
-        </div>
-      </div>
+      <EditorToolbar items={items} label="Conflict actions" />
 
       <div className="merge-grid">
         <section className="merge-pane">

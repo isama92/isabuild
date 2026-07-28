@@ -15,6 +15,8 @@ export interface Settings {
   fontSize: number;
   /** Keybinding overrides only, action id to accelerator. */
   keybindings: Record<string, string>;
+  /** Editor-window view overrides only, option id to whether it is on. */
+  viewOptions: Record<string, boolean>;
   lastProject: string | null;
   recentProjects: string[];
 }
@@ -25,6 +27,7 @@ export interface SettingsPatch {
   fontFamily?: string;
   fontSize?: number;
   keybindings?: Record<string, string>;
+  viewOptions?: Record<string, boolean>;
 }
 
 export interface Project {
