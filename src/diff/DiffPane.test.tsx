@@ -6,11 +6,12 @@
 // - Documents, editability, the diff itself, the toolbar and the panes' wiring are
 //   all real and testable. `EditorView.findFromDOM` gets a handle on each pane, so
 //   a change can be dispatched the way the revert control's would be.
-// - **The change map cannot be asserted here.** Its geometry comes from
+// - **The change map needs a layout faked for it.** Its geometry comes from
 //   `lineBlockAt` and `contentHeight`, which jsdom reports as zeros, so every mark
-//   would collapse to nothing. `lib/diffStripes` unit-tests the arithmetic against
-//   an injected geometry instead, and the strip's own behaviour is in
-//   `editor/OverviewRuler.test`.
+//   would otherwise collapse to nothing. `withLayout` stubs twenty pixels a line,
+//   which is enough to assert that the marks are wired to the chunks and to the
+//   theme. The arithmetic itself is `lib/diffStripes`' own test, against an
+//   injected geometry, and the strip's rendering is `editor/OverviewRuler.test`.
 // - **A `»` cannot be clicked.** @codemirror/merge places the revert buttons from
 //   measured chunk positions, so under jsdom the column is there and empty. That
 //   the control is configured is asserted; clicking one is a manual check, exactly
@@ -19,7 +20,7 @@
 //   heights are measured.
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { act, render, screen } from "@testing-library/react";
+import { act, render, screen, waitFor } from "@testing-library/react";
 import { EditorView } from "@codemirror/view";
 import { openSearchPanel } from "@codemirror/search";
 import { getChunks } from "@codemirror/merge";
@@ -373,10 +374,14 @@ describe("the change map", () => {
       view.dispatch({ changes: { from: 0, to: 0, insert: "" }, scrollIntoView: false });
     });
 
-    const marks = Array.from(container.querySelectorAll<HTMLElement>(".ew-ruler-mark"));
-    expect(marks).toHaveLength(1);
-    expect(marks[0].dataset.kind).toBe("modified");
-    expect(marks[0].style.background).toBe(hexToRgb(DEFAULT_THEME.tokens.markModified));
+    // `waitFor`, because the pane coalesces its measuring onto an animation frame
+    // rather than forcing a layout inside CodeMirror's update cycle.
+    await waitFor(() => {
+      expect(container.querySelectorAll(".ew-ruler-mark")).toHaveLength(1);
+    });
+    const mark = container.querySelector<HTMLElement>(".ew-ruler-mark");
+    expect(mark?.dataset.kind).toBe("modified");
+    expect(mark?.style.background).toBe(hexToRgb(DEFAULT_THEME.tokens.markModified));
   });
 
   it("recolours the marks when the theme changes", async () => {
@@ -398,8 +403,10 @@ describe("the change map", () => {
       });
     });
 
-    const mark = container.querySelector<HTMLElement>(".ew-ruler-mark");
-    expect(mark?.style.background).toBe(hexToRgb(light.tokens.markModified));
+    await waitFor(() => {
+      const mark = container.querySelector<HTMLElement>(".ew-ruler-mark");
+      expect(mark?.style.background).toBe(hexToRgb(light.tokens.markModified));
+    });
   });
 });
 
@@ -424,7 +431,9 @@ describe("diff precision", () => {
       pane(container, "b").dispatch({ changes: { from: 0, insert: "edited " } });
     });
 
-    expect(onImprecise.mock.calls.length).toBeGreaterThan(before);
+    await waitFor(() => {
+      expect(onImprecise.mock.calls.length).toBeGreaterThan(before);
+    });
     expect(onImprecise).toHaveBeenLastCalledWith(false);
   });
 });
