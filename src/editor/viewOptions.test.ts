@@ -32,9 +32,12 @@ describe("resolveViewOptions", () => {
     expect(resolveViewOptions({ "collapse-unchanged": true })["collapse-unchanged"]).toBe(true);
   });
 
-  it("ignores a value a hand-edited file got wrong", () => {
-    // Same rule as resolveBindings: a bad entry falls back rather than leaving a
-    // toggle that reads as on and behaves as off.
+  it("ignores a value that is not a boolean", () => {
+    // Belt and braces rather than a reachable path from `config.json`: a string
+    // there fails `BTreeMap<String, bool>` on the Rust side and takes the whole file
+    // to `config.json.bak` long before this runs. The guard is here so a value
+    // arriving from anywhere else cannot leave a toggle that reads as on and behaves
+    // as off.
     const overrides = { "collapse-unchanged": "yes" } as unknown as Record<string, boolean>;
     expect(resolveViewOptions(overrides)["collapse-unchanged"]).toBe(false);
   });

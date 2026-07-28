@@ -117,6 +117,16 @@ describe("OverviewRuler", () => {
     expect(chunkAt).not.toHaveBeenCalled();
   });
 
+  it("stays out of the accessibility tree", () => {
+    // A mouse shortcut to what Previous/Next already reach. The label it used to
+    // carry was inert anyway — a plain `aria-label` on a `div` is not exposed — so
+    // it read as labelled while being silent.
+    const { container } = render(
+      <OverviewRuler stripes={[stripe()]} colors={COLORS} onSeek={vi.fn()} chunkAt={vi.fn()} />,
+    );
+    expect(container.querySelector(".ew-ruler")).toHaveAttribute("aria-hidden", "true");
+  });
+
   it("renders an empty strip for a file with no changes", () => {
     const { container } = render(
       <OverviewRuler stripes={[]} colors={COLORS} onSeek={vi.fn()} chunkAt={vi.fn()} />,

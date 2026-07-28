@@ -38,11 +38,18 @@ export function OverviewRuler({ stripes, colors, onSeek, chunkAt }: OverviewRule
   }
 
   return (
-    // Not a listbox or a scrollbar: it is a decoration you may click, and the
-    // changes it marks are reachable from the toolbar's Previous/Next and their
-    // keybindings. `aria-hidden` would be wrong (the marks are meaningful), so it
-    // gets a plain label and stays out of the tab order.
-    <div className="ew-ruler" onClick={onClick} aria-label="Changes in this file">
+    // Hidden from assistive tech, deliberately. Everything the strip conveys is
+    // available without it: the toolbar says how many changes there are, and
+    // Previous/Next — with their keybindings — is the way to reach them. The strip
+    // is a mouse shortcut to the same thing, and it cannot be anything else here
+    // because it is not focusable and has no keyboard equivalent of its own.
+    //
+    // The alternative was `role="img"` with a label, which would have been exposed
+    // but would announce "Changes in this file" and nothing about the marks. A
+    // plain `aria-label` on a `div`, which is what this had, is the worst of the
+    // three: the generic role does not expose it, so it reads as labelled while
+    // being silent.
+    <div className="ew-ruler" onClick={onClick} aria-hidden="true">
       {stripes.map((stripe) => (
         <div
           className="ew-ruler-mark"

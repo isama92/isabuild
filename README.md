@@ -37,10 +37,10 @@ Settings live in one JSON file, in the OS's own config directory:
 It holds the theme, the monospace font and size, keybinding overrides, the editor windows'
 view options, and the recent projects. Every field is optional, so it is safe to hand-edit
 down to the one key you care about. `keybindings` and `viewOptions` hold **overrides only** —
-an action or an option with no entry uses its default, and an entry that does not make sense
-falls back to the default rather than leaving a dead control. A file that cannot be parsed is
-renamed to `config.json.bak` rather than overwritten, and the app starts from defaults and says
-so. Deleting the file resets everything.
+an action or an option with no entry uses its default, and an id the app does not recognise is
+kept but ignored. Getting a *type* wrong is not so gentle: `"collapse-unchanged": "yes"` does
+not parse as a boolean, and a file that cannot be parsed is renamed to `config.json.bak` and
+replaced with defaults, which the app says on startup. Deleting the file resets everything.
 
 ### Installing a build
 
@@ -169,7 +169,7 @@ Each part is an independent piece of work, executed in order, and its entry belo
 - [ ] more code-window view settings (the diff window has a Compact toggle; the registry is
       `src/editor/viewOptions.ts`, so each new setting is an entry there plus a handler)
 - [ ] ctrl+arrows to move between spaces
-- [ ] when a tool (terminal or git) is closed with shortcut  (eg. alt+1), move focus on claude
+- [ ] when a tool (terminal or git) is closed with a shortcut (eg. alt+1), move focus on claude
 - [ ] allow doing ctrl+backspace to remove a word in terminal or claude
 
 ## Global decisions

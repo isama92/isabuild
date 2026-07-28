@@ -189,6 +189,11 @@ export function useEditorWindow<P>(options: EditorWindowOptions<P>): WindowTarge
     function onKeyDown(event: KeyboardEvent) {
       if (event.defaultPrevented) return;
       if (!(event.ctrlKey || event.metaKey)) return;
+      // Exactly Ctrl/Cmd, no more. `lib/keybindings`' `matches` compares modifiers
+      // exactly for the same reason: a binding that fires on any superset shadows
+      // every combination built on top of it, so Ctrl+Shift+W would close the window
+      // and Ctrl+Shift+S would save when the user meant something else entirely.
+      if (event.shiftKey || event.altKey) return;
       const key = event.key.toLowerCase();
       const extra = acceleratorRef.current;
       if (extra !== undefined && key === extra.key) {

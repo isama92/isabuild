@@ -185,10 +185,22 @@ describe("PANE_KEYMAP", () => {
     // CodeMirror wins that race and marks the event handled, so the keystroke would
     // silently reorder lines — and in the diff window auto-save would put the
     // reordered file on disk 400 ms later.
-    const claimed = PANE_KEYMAP.filter(
-      (binding) => binding.key === "Alt-ArrowUp" || binding.key === "Alt-ArrowDown",
+    const claimed = PANE_KEYMAP.filter((binding) =>
+      [binding.key, binding.mac, binding.win, binding.linux].some(
+        (chord) => chord === "Alt-ArrowUp" || chord === "Alt-ArrowDown",
+      ),
     );
     expect(claimed).toEqual([]);
+  });
+
+  it("keeps the shifted pair, which the app has not bound", () => {
+    // copyLineUp/copyLineDown. An Alt-modified arrow may still change the file; what
+    // must not happen is the *unshifted* pair doing it while looking like navigation.
+    const shifted = PANE_KEYMAP.filter(
+      (binding) =>
+        binding.key === "Shift-Alt-ArrowUp" || binding.key === "Shift-Alt-ArrowDown",
+    );
+    expect(shifted).toHaveLength(2);
   });
 
   it("keeps everything else defaultKeymap offers", () => {

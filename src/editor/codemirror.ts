@@ -289,18 +289,31 @@ function editableFacets(editable: boolean): Extension {
  * Dropping them rather than out-prioritising them, because a pane for reviewing a
  * diff or resolving a conflict has no business moving lines around in the first
  * place; the app's own navigation is what these keys are for here.
+ *
+ * Only this pair goes. `Shift-Alt-ArrowUp`/`Shift-Alt-ArrowDown` (`copyLineUp`/
+ * `copyLineDown`) survive deliberately: an Alt-modified arrow can still change the
+ * file, just not on the two combinations the app has bound to navigation.
  */
 const CLAIMED_BY_THE_APP = new Set(["Alt-ArrowUp", "Alt-ArrowDown"]);
 
 /**
  * `defaultKeymap` minus [`CLAIMED_BY_THE_APP`].
  *
+ * Every field a binding can name a chord in is checked, not just `key`: a
+ * `KeyBinding` may carry `mac`, `win` and `linux` aliases that take precedence over
+ * `key` on their platform, so matching on `key` alone would let a future
+ * platform-specific spelling of the same command slip back in — on one OS only,
+ * which is the worst way to find out.
+ *
  * Composed by each pane rather than exported as a finished keymap: the diff's
  * editable side wants `indentWithTab` and the merge result pane deliberately does
  * not, and that difference predates this module.
  */
 export const PANE_KEYMAP: readonly KeyBinding[] = defaultKeymap.filter(
-  (binding) => binding.key === undefined || !CLAIMED_BY_THE_APP.has(binding.key),
+  (binding) =>
+    ![binding.key, binding.mac, binding.win, binding.linux].some(
+      (chord) => chord !== undefined && CLAIMED_BY_THE_APP.has(chord),
+    ),
 );
 
 /**

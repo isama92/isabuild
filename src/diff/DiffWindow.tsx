@@ -237,6 +237,13 @@ export function DiffWindow() {
   const failed = target.error !== undefined || phase === "error";
 
   const notices: Notice[] = [];
+  if (failed) {
+    notices.push({
+      id: "load",
+      tone: "error",
+      text: loadError ?? "Could not read this file.",
+    });
+  }
   if (saveError !== null) {
     notices.push({ id: "save", tone: "error", text: `Could not save: ${saveError}` });
   }
@@ -268,11 +275,6 @@ export function DiffWindow() {
         </>
       }
     >
-      {failed && (
-        <p className="ew-notice ew-notice--error" role="alert">
-          {loadError ?? "Could not read this file."}
-        </p>
-      )}
       {!failed && phase === "loading" && <p className="ew-notice">Loading diff…</p>}
       {!failed && phase === "ready" && diff !== null && diff.binary && (
         <p className="ew-notice">Binary file — no text diff to show.</p>

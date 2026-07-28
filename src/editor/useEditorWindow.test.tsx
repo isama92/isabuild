@@ -201,6 +201,20 @@ describe("closing", () => {
     expect(close).not.toHaveBeenCalled();
   });
 
+  it("ignores Ctrl+Shift+W and Ctrl+Shift+S", () => {
+    // Modifiers compare exactly, as `lib/keybindings`' `matches` does: a binding
+    // that fires on any superset shadows every combination built on top of it.
+    const run = vi.fn();
+    render(<Harness accelerator={{ key: "s", run }} />);
+
+    press({ key: "w", ctrlKey: true, shiftKey: true });
+    press({ key: "s", ctrlKey: true, shiftKey: true });
+    press({ key: "w", ctrlKey: true, altKey: true });
+
+    expect(close).not.toHaveBeenCalled();
+    expect(run).not.toHaveBeenCalled();
+  });
+
   it("ignores a bare letter that only matters with the accelerator", () => {
     const run = vi.fn();
     render(<Harness accelerator={{ key: "s", run }} />);
