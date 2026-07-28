@@ -99,14 +99,12 @@ through the PAT, the workflow's own `permissions:` block is not what authorises 
 
 ## Known limitations
 
-- **The whole tree is watched, even the parts that are then filtered out.** `watchfilter` stopped
-  ignored paths producing refreshes, but not the OS-level watch itself. On Linux
-  `RecursiveMode::Recursive` installs one inotify watch per directory: in this checkout that
-  is 4,923 of them, of which 2,915 are `src-tauri/target/` and 1,731 `node_modules/`, leaving
-  279 anyone cares about. Comfortable against the usual 524,288 limit, but a distro still
-  shipping the old 8,192 default sits at 60% for a single project, and exhausting it makes
-  the sidebar stop updating. macOS and Windows use one stream per root and are unaffected.
-  Roadmap part 1 is the fix.
+- **The whole tree is watched, even the parts whose events are then discarded.** An ignored path
+  costs nothing once reported, but the OS-level watch still covers it: on Linux that is one
+  inotify watch per directory, 4,923 in this checkout to observe the 279 that matter. Comfortable
+  against the usual 524,288 limit, fatal on a distro still shipping the old 8,192 default, where
+  exhausting the budget leaves the sidebar silently frozen. macOS and Windows use one stream per
+  root and are unaffected. The roadmap's "Watch only what matters" has the detail and the fix.
 - **A linked worktree or a submodule is not watched properly.** When the project's `.git` is a
   *file* rather than a directory, the index, HEAD and refs live outside the watch root, so
   staging in the terminal does not refresh the panel.
@@ -117,15 +115,13 @@ through the PAT, the workflow's own `permissions:` block is not what authorises 
 
 ## Roadmap
 
-Each part is an independent piece of work, executed in order, and its entry below *is* its plan — rationale, scope and acceptance criteria. A part is done only when its acceptance criteria pass on macOS, Linux and Windows.
-
-A completed part is **removed** from this list rather than ticked, and the rest are renumbered. So a number is a position in the queue, not a stable id: what finished work did and why is in `CHANGELOG.md` and in the git history, and the code refers to those parts by the numbers they had at the time.
+Each part is an independent piece of work, executed in order, and its entry below *is* its plan — rationale, scope and acceptance criteria. A part is done only when those pass on macOS, Linux and Windows, and it is then **removed** from this list rather than ticked, with the rest renumbered. A number is therefore a position in the queue and not a stable id: what shipped and why is in `CHANGELOG.md` and the git history, and code comments name the number a part had at the time.
 
 - [ ] **Part 1 — Watch only what matters**
   Stop asking the OS to watch directories the filter is only going to discard.
 
-  **Why this exists.** `watchfilter` made ignored paths cost nothing *once reported*, but the
-  watch itself is still recursive over everything. On Linux that is one inotify watch per
+  **Why this exists.** Ignored paths cost nothing *once reported* — `watchfilter` sees to that —
+  but the watch itself is recursive over everything. On Linux that is one inotify watch per
   directory: 4,923 in this checkout to observe the 279 that are not `target/` or
   `node_modules/`, so 94% of the kernel memory and of the watch budget is spent on paths whose
   events are thrown away. It is invisible at the usual 524,288 limit and fatal at the old
@@ -144,15 +140,15 @@ A completed part is **removed** from this list rather than ticked, and the rest 
   spends a burst of `check-ignore` batches learning what it could have learned during the walk.
 
 - [ ] **Part 2 — Align the merge panes**
-  Give ours | result | theirs the vertical alignment the diff panes now have, and retire the
+  Give ours | result | theirs the vertical alignment the diff panes have, and retire the
   proportional scroll sync.
 
-  **Why this exists.** Retiring Monaco was expected to hand this over for free and did not:
-  `@codemirror/merge` aligns two documents with spacer blocks, but the aligner lives inside the
-  `MergeView` class rather than being an exported extension, and a `MergeView` is strictly two
-  documents — so the three-pane merge editor cannot be one. Its original limitation stands:
-  the panes are synchronised in proportion (`lib/paneScroll.ts`), not aligned, so they drift apart
-  in a long file and next/previous conflict is the only reliable way to move between chunks.
+  **Why this exists.** The three panes are synchronised in proportion (`lib/paneScroll.ts`), not
+  aligned, so they drift apart in a long file and next/previous conflict is the only reliable way
+  to move between chunks. The diff panes do not have that problem, and the obvious thought — reuse
+  whatever they use — does not work: `@codemirror/merge` aligns with spacer blocks, but the aligner
+  lives inside the `MergeView` class rather than being an exported extension, and a `MergeView` is
+  strictly two documents, so a three-pane editor cannot be one.
 
   **What it needs.** Our own spacer widgets, from a chunk model we already have: Rust hands over
   each chunk's span in all four coordinate systems (base, ours, theirs, result), so the padding
@@ -170,15 +166,15 @@ A completed part is **removed** from this list rather than ticked, and the rest 
 - [ ] help menu with `check for update` and `about` pages
 - [ ] view menu with theme selector and zoom
 - [ ] have files opening in place of claude code instead of opening in a new window (it should be faster)
-- [ ] more code-window view settings (compacting unchanged rows already landed; the toolbar
-      and its registry are in `src/editor/viewOptions.ts`, so each new one is an entry plus a handler)
+- [ ] more code-window view settings (the diff window has a Compact toggle; the registry is
+      `src/editor/viewOptions.ts`, so each new setting is an entry there plus a handler)
 - [ ] ctrl+arrows to move between spaces
 - [ ] when a tool (terminal or git) is closed with shortcut  (eg. alt+1), move focus on claude
 - [ ] allow doing ctrl+backspace to remove a word in therminal or claude
 
 ## Global decisions
 
-- Git operations shell out to the system `git` binary — inherits the user's SSH agent, credential helpers and hooks. Human-readable git output is never parsed.
+- Shelling out to the system `git` rather than linking a library is what gives the app the user's SSH agent, credential helpers and hooks for free.
 - PTYs live in the Rust backend keyed by id; the frontend attaches and re-attaches. PTY lifetime is never tied to a React component.
 - Claude Code manages its own subscription auth; the app just gives it a PTY.
 
