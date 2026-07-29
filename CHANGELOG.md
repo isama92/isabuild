@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.4.0](https://github.com/isama92/isabuild/compare/v0.3.0...v0.4.0) (2026-07-29)
+
+
+### Features
+
+* part 1 — watch only what matters ([#19](https://github.com/isama92/isabuild/issues/19)) ([46d5430](https://github.com/isama92/isabuild/commit/46d54308fc23953e545d07fb67fa6240f672e078))
+
 ## [0.3.0](https://github.com/isama92/isabuild/compare/v0.2.0...v0.3.0) (2026-07-28)
 
 
