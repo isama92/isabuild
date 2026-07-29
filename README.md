@@ -150,9 +150,11 @@ Each part is an independent piece of work, executed in order, and its entry belo
   everything else, including the owner thread, is shared and exercised on all three platforms.
 
   **What is outstanding.** `cross-os.yml` runs the Rust suite on `windows-2022` and `macos-14`,
-  which covers the shared lifecycle and the walk's own tests. Still to confirm by hand on macOS
-  and Windows: opening a project, staging from the embedded terminal, a branch switch, and a
-  build churning an ignored directory, all still refreshing the panel exactly as before.
+  which covers the shared lifecycle and the walk's own tests — but it triggers on **push to
+  `main`**, not on pull requests, so that signal only arrives *after* this merges and a failure
+  lands on `main`. The PR gate is Linux-only. Then still to confirm by hand on macOS and Windows:
+  opening a project, staging from the embedded terminal, a branch switch, and a build churning an
+  ignored directory, all still refreshing the panel exactly as before.
 
 - [ ] **Part 2 — Align the merge panes**
   Give ours | result | theirs the vertical alignment the diff panes have, and retire the
