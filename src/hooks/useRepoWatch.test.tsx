@@ -63,7 +63,7 @@ beforeEach(() => {
   getStatusMock.mockResolvedValue({ repoRoot: "/repo", staged: [], unstaged: [], conflicts: [] });
   getBranchStateMock.mockResolvedValue(BRANCH_STATE);
   getMergeStateMock.mockResolvedValue(mergeState("none"));
-  startWatchMock.mockResolvedValue(undefined);
+  startWatchMock.mockResolvedValue({ watched: 12, failed: 0 });
   onRepoChangedMock.mockImplementation((cb: () => void) => {
     repoChangedCb = cb;
     return Promise.resolve(unlisten as unknown as () => void);
@@ -208,6 +208,30 @@ describe("useRepoWatch", () => {
 
     expect(onRepoChangedMock).toHaveBeenCalledTimes(1);
     expect(useGitStore.getState().phase).toBe("ready");
+  });
+
+  it("warns when the watch only partly armed", async () => {
+    // The failure this reports is the dangerous one: some of the tree refreshes
+    // and the rest silently does not, which looks exactly like a working watch.
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    startWatchMock.mockResolvedValue({ watched: 40, failed: 7 });
+    render(<Harness />);
+    await flush();
+
+    expect(warn).toHaveBeenCalledTimes(1);
+    expect(warn.mock.calls[0]![0]).toContain("7 refused");
+    // Still a live watch over what did arm.
+    expect(onRepoChangedMock).toHaveBeenCalledTimes(1);
+    warn.mockRestore();
+  });
+
+  it("says nothing when the watch armed completely", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    render(<Harness />);
+    await flush();
+
+    expect(warn).not.toHaveBeenCalled();
+    warn.mockRestore();
   });
 
   it("does not subscribe when unmounted before the initial fetch resolves", async () => {

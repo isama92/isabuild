@@ -73,9 +73,23 @@ export function getStatus(path?: string): Promise<GitStatus> {
   return invoke<GitStatus>("git_status", { path: path ?? null });
 }
 
+/**
+ * How much of the tree the backend watch covers. Mirrors Rust `WatchSummary`.
+ *
+ * On Linux the watch is assembled a directory at a time (only the ones git does
+ * not ignore), so it can succeed partially — `failed` above zero means the OS
+ * refused some of them, most likely an exhausted inotify budget, and events from
+ * part of the tree will be missed. Elsewhere one recursive watch covers the root
+ * and `watched` is always 1.
+ */
+export interface WatchSummary {
+  watched: number;
+  failed: number;
+}
+
 /** (Re)start the debounced backend file watcher on `repoRoot`. */
-export function startWatch(repoRoot: string): Promise<void> {
-  return invoke<void>("git_watch", { repoRoot });
+export function startWatch(repoRoot: string): Promise<WatchSummary> {
+  return invoke<WatchSummary>("git_watch", { repoRoot });
 }
 
 /**

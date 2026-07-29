@@ -254,6 +254,44 @@ pub fn check_ignored(root: &Path, rel_slugs: &[String]) -> Result<HashSet<String
     }
 }
 
+/// Tracked files that the ignore rules would otherwise exclude:
+/// `git ls-files --cached --ignored --exclude-standard -z`.
+///
+/// The other half of the note on [`check_ignored`]'s missing `--no-index`. A
+/// `git add -f node_modules/keep.js` makes a path that `status` reports and the
+/// ignore rules hide, which matters to [`crate::watchtree`] rather than to the
+/// filter: an ignored directory gets no OS-level watch, so without asking for
+/// these by name, the one file inside it that git *does* report would never
+/// produce an event at all.
+///
+/// Returns `/`-separated slugs relative to `root`, as git prints them. Empty is
+/// the overwhelmingly common answer and costs one process.
+pub fn tracked_ignored(root: &Path) -> Result<Vec<String>, GitError> {
+    let output = git_read_command(root)
+        // `--full-name` because the slugs are relative to the repository root by
+        // contract; without it they would be relative to git's cwd, which is only
+        // the same thing for as long as every caller passes a resolved root.
+        .args([
+            "ls-files",
+            "--cached",
+            "--ignored",
+            "--exclude-standard",
+            "--full-name",
+            "-z",
+        ])
+        .output()
+        .map_err(map_io_err)?;
+    if !output.status.success() {
+        return Err(GitError::CommandFailed(stderr_of(&output)));
+    }
+    Ok(output
+        .stdout
+        .split(|&byte| byte == 0)
+        .filter(|slug| !slug.is_empty())
+        .map(|slug| String::from_utf8_lossy(slug).into_owned())
+        .collect())
+}
+
 /// A `git` invocation rooted at `dir`, with stdin closed so it can never block
 /// waiting for input. On Windows, `CREATE_NO_WINDOW` stops a console flashing.
 pub(crate) fn git_command(dir: &Path) -> Command {
@@ -875,6 +913,40 @@ mod tests {
         let dir = tempfile::tempdir().expect("temp dir");
         let error = check_ignored(dir.path(), &slugs(&["anything.txt"]))
             .expect_err("not a repository must fail");
+        assert!(matches!(error, GitError::CommandFailed(_)));
+    }
+
+    #[test]
+    fn tracked_ignored_lists_a_force_added_file() {
+        // The one path inside an ignored directory that `status` still reports, and
+        // therefore the one the walk has to keep a watch on the way to.
+        let dir = repo_ignoring_a_directory();
+        crate::testrepo::write(dir.path(), "ignored/keep.txt", "one\n");
+        crate::testrepo::git_in(dir.path(), &["add", "-f", "ignored/keep.txt"]);
+        crate::testrepo::commit(dir.path(), "force add");
+        // An ordinary ignored sibling, which must not be listed.
+        crate::testrepo::write(dir.path(), "ignored/scratch.tmp", "x\n");
+
+        assert_eq!(
+            tracked_ignored(dir.path()).expect("ls-files answers"),
+            vec!["ignored/keep.txt".to_string()]
+        );
+    }
+
+    #[test]
+    fn tracked_ignored_is_empty_without_one() {
+        // The overwhelmingly common answer, and an empty stdout is exit 0.
+        let dir = repo_ignoring_a_directory();
+        crate::testrepo::write(dir.path(), "ignored/scratch.tmp", "x\n");
+        assert!(tracked_ignored(dir.path())
+            .expect("ls-files answers")
+            .is_empty());
+    }
+
+    #[test]
+    fn tracked_ignored_errors_outside_a_repository() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let error = tracked_ignored(dir.path()).expect_err("not a repository must fail");
         assert!(matches!(error, GitError::CommandFailed(_)));
     }
 

@@ -99,18 +99,23 @@ through the PAT, the workflow's own `permissions:` block is not what authorises 
 
 ## Known limitations
 
-- **The whole tree is watched, even the parts whose events are then discarded.** An ignored path
-  costs nothing once reported, but the OS-level watch still covers it: on Linux that is one
-  inotify watch per directory, 4,923 in this checkout to observe the 279 that matter. Comfortable
-  against the usual 524,288 limit, fatal on a distro still shipping the old 8,192 default, where
-  exhausting the budget leaves the sidebar silently frozen. macOS and Windows use one stream per
-  root and are unaffected. The roadmap's "Watch only what matters" has the detail and the fix.
+- **A very large repository can still exhaust the watch budget.** On Linux the watch is assembled a
+  directory at a time and skips everything git ignores, so this checkout holds 32 watches rather
+  than the 4,419 a recursive watch spends to observe them. Two shapes can still run past a distro's
+  `fs.inotify.max_user_watches` (the old 8,192 default is the one to watch for): tens of thousands
+  of *unignored* directories, and a **submodule**, where `git check-ignore` refuses to classify
+  anything inside and "not knowing means watching" then covers the whole of it, ignored
+  subdirectories included. Arming succeeds partially rather than failing, and `git_watch` returns
+  the count of refused directories — but that count currently only reaches a `console.warn`, so a
+  user without devtools open still has no visible signal. macOS and Windows use one recursive
+  stream per root, which is already cheap there, and are unaffected either way.
 - **A linked worktree or a submodule is not watched properly.** When the project's `.git` is a
   *file* rather than a directory, the index, HEAD and refs live outside the watch root, so
   staging in the terminal does not refresh the panel.
-- **A `git add -f` inside an ignored directory** can be missed until the next time the ignore
-  cache is discarded. The `git add` itself is always seen; later edits to that file may not
-  be.
+- **A `git add -f` inside an ignored directory** can be missed on macOS and Windows until the next
+  time the ignore cache is discarded. The `git add` itself is always seen; later edits to that file
+  may not be. Handled on Linux, where an index write re-reads the force-added set, watches the
+  directories on the way to each one, and discards the stale "this directory is ignored" verdict.
 - **The app does not sign or notarise its installers.** See "Installing a build" above.
 
 ## Roadmap
@@ -118,26 +123,38 @@ through the PAT, the workflow's own `permissions:` block is not what authorises 
 Each part is an independent piece of work, executed in order, and its entry below *is* its plan — rationale, scope and acceptance criteria. A part is done only when those pass on macOS, Linux and Windows, and it is then **removed** from this list rather than ticked, with the rest renumbered. A number is therefore a position in the queue and not a stable id: what shipped and why is in `CHANGELOG.md` and the git history, and code comments name the number a part had at the time.
 
 - [ ] **Part 1 — Watch only what matters**
-  Stop asking the OS to watch directories the filter is only going to discard.
+  Built and verified on Linux; **outstanding: confirmation on macOS and Windows.**
 
-  **Why this exists.** Ignored paths cost nothing *once reported* — `watchfilter` sees to that —
-  but the watch itself is recursive over everything. On Linux that is one inotify watch per
-  directory: 4,923 in this checkout to observe the 279 that are not `target/` or
-  `node_modules/`, so 94% of the kernel memory and of the watch budget is spent on paths whose
-  events are thrown away. It is invisible at the usual 524,288 limit and fatal at the old
-  8,192 default, where a large monorepo can exhaust the budget and leave the sidebar silently
-  frozen — which is the same failure the user cannot detect and cannot force a refresh out of.
+  **What shipped.** The watch is assembled a directory at a time on Linux (`src-tauri/src/watchtree.rs`),
+  walking the tree, asking `watchfilter` which directories survive, and arming only those: 4,419
+  inotify watches became 32 in this checkout, and arming got 41x faster with them (813 ms to 20 ms),
+  because a recursive watch spends one watch per directory and 99% of them were on paths whose
+  events were thrown away. `.git/objects` and `.git/logs`
+  alone are 255 of the 264 directories under `.git`, and the filter already knew every event they
+  produce is worthless. A directory appearing or disappearing is reconciled from the event batch,
+  a subtree is re-read *after* it is armed so nothing created in the gap is lost, and a
+  `.gitignore` edit re-plans the set in both directions. The arming replay is folded in: the walk
+  records what the replay used to teach, at one `check-ignore` per level of the tree. Arming can
+  now fail partially, so `git_watch` returns the coverage and the frontend warns on a refused
+  count.
 
-  **What it needs.** `notify` has no include/exclude hook for `RecursiveMode::Recursive`, so
-  this means watching non-recursively and managing sub-watches ourselves: walk the tree
-  applying `watchfilter`'s own ignore rules, add a watch per surviving directory, and add or
-  drop watches as directories appear and disappear. The ignore decisions are already written
-  and tested; the new work is the bookkeeping, and getting "a directory was created inside a
-  watched one" right without racing the events that arrive before its watch exists.
+  **Still outstanding on the reporting.** That warning is a `console.warn`, which a user without
+  devtools open will never see, so a partially armed watch is quieter than before rather than
+  actually visible. Making it a UI signal is deliberately not in this part; the known-limitation
+  entry above says so plainly rather than claiming the failure is now surfaced.
 
-  **Also worth folding in**, since it needs the same code: the arming replay. Watching
-  recursively today reports every path it discovers as a synthetic event, so opening a project
-  spends a burst of `check-ignore` batches learning what it could have learned during the walk.
+  **Deliberately Linux-only.** `notify`'s macOS backend stops, joins and rebuilds its entire
+  FSEvents stream on *every* `watch()` call, so arming per directory would cost one rebuild each;
+  Windows holds an open handle and a 16 KB buffer per watch. Both use one recursive stream per
+  root today, which is already cheap. `arm` and `reconcile` in `watcher.rs` are the two seams;
+  everything else, including the owner thread, is shared and exercised on all three platforms.
+
+  **What is outstanding.** `cross-os.yml` runs the Rust suite on `windows-2022` and `macos-14`,
+  which covers the shared lifecycle and the walk's own tests — but it triggers on **push to
+  `main`**, not on pull requests, so that signal only arrives *after* this merges and a failure
+  lands on `main`. The PR gate is Linux-only. Then still to confirm by hand on macOS and Windows:
+  opening a project, staging from the embedded terminal, a branch switch, and a build churning an
+  ignored directory, all still refreshing the panel exactly as before.
 
 - [ ] **Part 2 — Align the merge panes**
   Give ours | result | theirs the vertical alignment the diff panes have, and retire the

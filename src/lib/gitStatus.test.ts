@@ -26,9 +26,9 @@ describe("gitStatus lib", () => {
     expect(invokeMock).toHaveBeenCalledWith("git_status", { path: null });
   });
 
-  it("startWatch invokes git_watch with the repo root", async () => {
-    invokeMock.mockResolvedValue(undefined);
-    await startWatch("/r");
+  it("startWatch invokes git_watch with the repo root and returns the coverage", async () => {
+    invokeMock.mockResolvedValue({ watched: 28, failed: 0 });
+    await expect(startWatch("/r")).resolves.toEqual({ watched: 28, failed: 0 });
     expect(invokeMock).toHaveBeenCalledWith("git_watch", { repoRoot: "/r" });
   });
 
