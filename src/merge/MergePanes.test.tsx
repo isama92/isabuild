@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { fireEvent, render, screen } from "@testing-library/react";
+import { act, fireEvent, render, screen } from "@testing-library/react";
 import { MergePanes } from "./MergePanes";
 import type { ConflictStages } from "../lib/gitMerge";
 
@@ -12,7 +12,15 @@ import type { ConflictStages } from "../lib/gitMerge";
 //   every arrow would resolve to line 1. The arrows' *presence* is asserted here;
 //   the apply path they share with the toolbar is driven through the toolbar, which
 //   is plain React. Clicking an arrow is left to the manual pass in the plan.
-// - Nothing asserts on scroll positions; paneScroll's arithmetic is unit-tested.
+// - **The alignment is testable, the scrolling is not.** CodeMirror answers
+//   `defaultLineHeight` 14 and an estimated `contentHeight` under jsdom rather than
+//   0, so the spacer widgets and the change map's marks are both really built here,
+//   and a spacer carries its line count in `data-lines` so the arithmetic can be
+//   read back without pixels. What cannot be asserted is that one scrollbar moves
+//   all three panes, or where a click on the strip lands: nothing scrolls and every
+//   box is zero. The structure that makes the first true is asserted instead, the
+//   strip's own click path is covered in `editor/OverviewRuler.test`, and the rest
+//   is the manual pass.
 //
 // @codemirror/language-data is stubbed to nothing: it dynamically imports ~140
 // language modules, and highlighting is not what this file is about.
@@ -110,10 +118,35 @@ function arrowsIn(testId: string): NodeListOf<Element> {
   return screen.getByTestId(testId).querySelectorAll(".isabuild-arrow");
 }
 
+/** One pane's padding, in blank lines, top to bottom. */
+function spacersIn(testId: string): number[] {
+  return Array.from(screen.getByTestId(testId).querySelectorAll<HTMLElement>(".isabuild-spacer")).map(
+    (element) => Number(element.dataset.lines),
+  );
+}
+
+/** What the change map is saying, mark by mark. */
+function markKinds(): (string | null)[] {
+  return Array.from(document.querySelectorAll(".ew-ruler-mark")).map((mark) =>
+    mark.getAttribute("data-kind"),
+  );
+}
+
 const click = (name: RegExp) => fireEvent.click(screen.getByRole("button", { name }));
 
 /** Move the cursor to the next conflict — the one navigation that needs no pixels. */
 const toNextConflict = () => click(/next/i);
+
+/**
+ * Let the alignment's recompute run.
+ *
+ * It is queued as a microtask after the edit that provoked it, so one turn of the
+ * event loop is all it takes. Deliberately *not* a wait on an animation frame:
+ * CodeMirror's own measure pass rides one, and in jsdom it throws — jsdom
+ * implements no `Range.getClientRects` at all — so a test that idles for 16ms takes
+ * an unhandled error with it.
+ */
+const settle = () => act(async () => {});
 
 afterEach(() => {
   vi.restoreAllMocks();
@@ -191,6 +224,108 @@ describe("MergePanes", () => {
       setup({ chunks: [chunk("ours", [0, 6], [0, 6], [0, 6], [0, 14])] });
       expect(arrowsIn("pane-ours")).toHaveLength(0);
       expect(arrowsIn("pane-theirs")).toHaveLength(1);
+    });
+  });
+
+  describe("the alignment", () => {
+    it("holds the three panes in one scroll box", () => {
+      // The basis of the whole thing: one scroll position means there is no sync to
+      // get wrong. jsdom scrolls nothing, so what is asserted is the structure that
+      // makes it true rather than the scrolling itself.
+      setup();
+      const scroller = screen.getByTestId("merge-scroll");
+      for (const testId of ["pane-ours", "pane-result", "pane-theirs"]) {
+        expect(scroller).toContainElement(screen.getByTestId(testId));
+      }
+    });
+
+    it("pads each side around its own half of a conflict block", () => {
+      // Our side sits opposite its copy inside the markers, so the ours pane pads
+      // one line for the `<<<<<<<` above it and three for `=======`, their line and
+      // `>>>>>>>` below. Theirs is the mirror of that. Twice over, for two
+      // conflicts, and the result pane needs nothing: it is the tallest everywhere.
+      setup();
+      expect(spacersIn("pane-ours")).toEqual([1, 3, 1, 3]);
+      expect(spacersIn("pane-theirs")).toEqual([3, 1, 3, 1]);
+      expect(spacersIn("pane-result")).toEqual([]);
+    });
+
+    it("leaves a file neither side changed unpadded", () => {
+      setup({ chunks: [chunk("unchanged", [0, 6], [0, 6], [0, 6], [0, 14])] }, "a\nb\nc\nd\ne\nf");
+      expect(spacersIn("pane-ours")).toEqual([]);
+      expect(spacersIn("pane-theirs")).toEqual([]);
+    });
+
+    it("pads the side that did not touch a one-sided chunk", () => {
+      // Ours turned one base line into two, so the result holds two lines and
+      // theirs still has one. Theirs is the pane with a row to spare.
+      setup(
+        {
+          ours: ["MINE1", "MINE2"],
+          theirs: ["b"],
+          chunks: [chunk("ours", [0, 1], [0, 2], [0, 1], [0, 2])],
+        },
+        "MINE1\nMINE2",
+      );
+      expect(spacersIn("pane-theirs")).toEqual([1]);
+      expect(spacersIn("pane-ours")).toEqual([]);
+    });
+
+    it("realigns on the text that replaced a conflict", async () => {
+      // "Take mine" leaves one line where five were, and the panes have to follow:
+      // the first conflict's padding goes, the second conflict's stays.
+      setup();
+      toNextConflict();
+      click(/take mine/i);
+      await settle();
+      expect(spacersIn("pane-ours")).toEqual([1, 3]);
+      expect(spacersIn("pane-theirs")).toEqual([3, 1]);
+    });
+
+    it("aligns a conflict at chunk level once its markers are half gone", () => {
+      // No `=======` to align their half against, so guessing is refused: the whole
+      // chunk is top-aligned instead. Four result lines against one each side.
+      setup(
+        {
+          ours: ["MINE"],
+          theirs: ["THEIRS"],
+          chunks: [chunk("conflict", [0, 1], [0, 1], [0, 1], [0, 4])],
+        },
+        "<<<<<<< HEAD\nMINE\nTHEIRS\n>>>>>>> feature",
+      );
+      expect(spacersIn("pane-ours")).toEqual([3]);
+      expect(spacersIn("pane-theirs")).toEqual([3]);
+    });
+  });
+
+  describe("the change map", () => {
+    it("marks the chunks either side touched, and nothing else", () => {
+      // Three unchanged chunks in the fixture get no mark: they are most of a file,
+      // and marking them would leave a strip that is uniformly full.
+      setup();
+      expect(markKinds()).toEqual(["conflict", "conflict"]);
+    });
+
+    it("says whose each chunk is", () => {
+      setup({
+        chunks: [
+          chunk("ours", [0, 1], [0, 1], [0, 1], [0, 1]),
+          chunk("theirs", [1, 2], [1, 2], [1, 2], [1, 2]),
+          chunk("agreed", [2, 3], [2, 3], [2, 3], [2, 3]),
+          chunk("unchanged", [3, 6], [3, 6], [3, 6], [3, 14]),
+        ],
+      });
+      expect(markKinds()).toEqual(["ours", "theirs", "agreed"]);
+    });
+
+    it("dims a conflict once it has been decided", async () => {
+      // The mark stays, in the dimmest token: a mark that vanished would also move
+      // every judgement about how much of the file is left to do.
+      setup();
+      toNextConflict();
+      click(/take mine/i);
+      await settle();
+      expect(markKinds()).toEqual(["resolved", "conflict"]);
     });
   });
 

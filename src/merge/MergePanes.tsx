@@ -16,11 +16,14 @@
 //   every transaction, so an arrow still hits the right lines after the user has
 //   typed above them. What is *not* remembered is where the newline goes — see
 //   `lineAlignedEdit`.
-// - **Panes are synchronised proportionally, not aligned.** No filler blocks are
-//   inserted — the diff window gets those from `@codemirror/merge`, which cannot
-//   help here because a MergeView is strictly two documents — so the panes drift
-//   apart in a long file, which is what makes next/previous conflict the primary way
-//   to move. The README roadmap's "Align the merge panes" is the fix.
+// - **The three panes are one scroll box.** There is no scroll sync: the editors
+//   are laid out at their natural height and a single container scrolls them, the
+//   way a `MergeView` scrolls its container rather than its editors. Alignment is
+//   what makes that legitimate, and it comes from block spacer widgets computed by
+//   `lib/mergeAlign` — our own, because `@codemirror/merge`'s aligner is private to
+//   a class that is strictly two documents. Everything about *where* the padding
+//   goes is in that module; what is here is the widget, the recompute and the one
+//   number the arithmetic needs from the DOM (a line's height).
 // - **This component is remounted, not updated, when the file is reloaded.** The
 //   window keys it on the stages' revision, and only ever hands over new stages it
 //   has decided to adopt — so a reload it declined, to protect a touched buffer,
@@ -37,6 +40,7 @@ import {
   Decoration,
   EditorView,
   GutterMarker,
+  WidgetType,
   gutter,
   keymap,
   type DecorationSet,
@@ -47,12 +51,33 @@ import { languageForPath } from "../lib/cmLanguage";
 import { currentAppearance, onAppearance } from "../lib/appearance";
 import { useWindowKeybindings } from "../hooks/useWindowKeybindings";
 import { DEFAULT_THEME } from "../theme/themes";
-import { mirrorScrollTop, worthScrolling } from "../lib/paneScroll";
+import {
+  alignPanes,
+  lineSpan,
+  sameSpacers,
+  PANES,
+  type AlignChunk,
+  type Alignment,
+  // The pane union comes from the alignment module rather than being declared again
+  // here: the two would be the same three names in two places, and `PANES` is
+  // already imported from it.
+  type PaneName,
+  type Spacer,
+} from "../lib/mergeAlign";
+import {
+  computeMergeStripes,
+  mergeMarkColors,
+  MERGE_MARK_LABELS,
+  type MergeMarkChunk,
+} from "../lib/mergeStripes";
+import { sameStripes, stripeAt, type Stripe } from "../lib/overviewStripes";
+import { OverviewRuler } from "../editor/OverviewRuler";
 import {
   actionsFor,
   chunkAtOffset,
   chunkLabel,
   countConflictMarkers,
+  isConflictStart,
   isMarker,
   lineAlignedEdit,
   linesFor,
@@ -81,11 +106,16 @@ export interface MergePanesProps {
   /** The result buffer's text. */
   value: string;
   onChange: (text: string) => void;
-  /** Disables every action while a write is in flight. */
+  /**
+   * Whether a write is in flight.
+   *
+   * Disables the toolbar's chunk actions only. Typing and the gutter arrows stay
+   * live, deliberately: the buffer is the user's throughout, and `MergeWindow`'s
+   * `commit` is where that decision is paid for.
+   */
   busy: boolean;
 }
 
-type PaneName = "ours" | "result" | "theirs";
 type SideName = "ours" | "theirs";
 
 /**
@@ -160,6 +190,101 @@ const markerHighlight = StateField.define<DecorationSet>({
   provide: (field) => EditorView.decorations.from(field),
 });
 
+/**
+ * Alignment padding, as a block widget.
+ *
+ * The height is what the pane needs to keep step with the tallest of the three,
+ * and `estimatedHeight` matters as much as the style: CodeMirror asks for it when
+ * the widget is outside the viewport, and without it a spacer below the fold would
+ * be guessed at and the alignment would jump as you scrolled into it.
+ *
+ * `data-lines` carries the arithmetic's own answer. It is the only part of a
+ * spacer a jsdom test can read, because pixel heights come from a measured line
+ * and jsdom measures nothing.
+ */
+class SpacerWidget extends WidgetType {
+  constructor(
+    private readonly lines: number,
+    private readonly height: number,
+  ) {
+    super();
+  }
+
+  override eq(other: SpacerWidget) {
+    return other.lines === this.lines && other.height === this.height;
+  }
+
+  override toDOM() {
+    const element = document.createElement("div");
+    element.className = "isabuild-spacer";
+    this.paint(element);
+    return element;
+  }
+
+  override updateDOM(dom: HTMLElement) {
+    this.paint(dom);
+    return true;
+  }
+
+  override get estimatedHeight() {
+    return this.height;
+  }
+
+  /** Clicks land on the pane behind rather than being swallowed by the padding. */
+  override ignoreEvent() {
+    return false;
+  }
+
+  private paint(element: HTMLElement) {
+    element.style.height = `${this.height}px`;
+    element.dataset.lines = String(this.lines);
+  }
+}
+
+/**
+ * The whole of a pane's padding, replaced at once.
+ *
+ * One effect carrying the finished set, rather than incremental edits, because
+ * the alignment is a function of the three documents together: there is no such
+ * thing as adjusting one spacer correctly on its own. Mapped through changes so a
+ * spacer stays put in the transaction that arrives before the next recompute.
+ */
+const setSpacers = StateEffect.define<DecorationSet>({
+  map: (value, mapping) => value.map(mapping),
+});
+
+const spacerField = StateField.define<DecorationSet>({
+  create: () => Decoration.none,
+  update: (spacers, transaction) => {
+    for (const effect of transaction.effects) {
+      if (effect.is(setSpacers)) return effect.value;
+    }
+    return spacers.map(transaction.changes);
+  },
+  provide: (field) => EditorView.decorations.from(field),
+});
+
+/** One pane's padding as decorations, in that pane's own coordinates. */
+function spacerDecorations(
+  view: EditorView,
+  spacers: readonly Spacer[],
+  lineHeight: number,
+): DecorationSet {
+  const doc = view.state.doc;
+  const ranges = spacers.map((spacer) => {
+    // A spacer at the pane's line count is the closing one, and the end of the
+    // document has no following line to sit in front of.
+    const atEnd = spacer.line >= doc.lines;
+    const position = atEnd ? doc.length : doc.line(spacer.line + 1).from;
+    return Decoration.widget({
+      widget: new SpacerWidget(spacer.lines, spacer.lines * lineHeight),
+      block: true,
+      side: atEnd ? 1 : -1,
+    }).range(position);
+  });
+  return Decoration.set(ranges, true);
+}
+
 class ArrowMarker extends GutterMarker {
   constructor(private readonly glyph: string) {
     super();
@@ -188,6 +313,8 @@ export function MergePanes({ path, stages, value, onChange, busy }: MergePanesPr
   const views = useRef<Partial<Record<PaneName, EditorView>>>({});
   const tracked = useRef<StateField<TrackedChunk[]> | null>(null);
   const [currentChunk, setCurrentChunk] = useState<number | null>(null);
+  const [stripes, setStripes] = useState<readonly Stripe[]>([]);
+  const [theme, setTheme] = useState(() => currentAppearance()?.theme ?? DEFAULT_THEME);
   const { state: viewOptions, toggle: toggleViewOption } = useViewOptions();
 
   // Values that only seed the editors, and callbacks their own listeners reach
@@ -211,29 +338,122 @@ export function MergePanes({ path, stages, value, onChange, busy }: MergePanesPr
 
   const chunks = stages.chunks;
 
-  // --- scroll sync --------------------------------------------------------
-  // A flag rather than a debounce: assigning scrollTop fires another scroll event,
-  // so without it three panes bounce off each other indefinitely. paneScroll's
-  // own tolerance stops most events ever reaching this far.
-  const syncing = useRef(false);
-  const mirrorFrom = useCallback((source: PaneName) => {
-    if (syncing.current) return;
-    const from = views.current[source]?.scrollDOM;
-    if (!from) return;
-    syncing.current = true;
-    try {
-      for (const name of ["ours", "result", "theirs"] as PaneName[]) {
-        const target = views.current[name]?.scrollDOM;
-        if (name === source || !target) continue;
-        const next = mirrorScrollTop(from, target);
-        if (worthScrolling(target.scrollTop, next, lineHeightOf(from))) {
-          target.scrollTop = next;
-        }
-      }
-    } finally {
-      syncing.current = false;
+  // --- alignment and the change map ---------------------------------------
+  //
+  // Both come out of one pass over the chunk model, because both need the same
+  // thing: where every chunk is in the result buffer *now*. The padding follows
+  // from `lib/mergeAlign`, the marks from `lib/mergeStripes`, and the only number
+  // taken from the DOM is how tall a line is.
+  /** The last padding dispatched, so a recompute that changes nothing dispatches nothing. */
+  const alignedRef = useRef<{ lineHeight: number; alignment: Alignment } | null>(null);
+  const pendingRef = useRef(false);
+
+  const measureNow = useCallback(() => {
+    const result = views.current.result;
+    const field = tracked.current;
+    if (!result || !field) return;
+    const model = modelRef.current.chunks;
+    const spans = result.state.field(field);
+    const doc = result.state.doc;
+    const lineHeight = result.defaultLineHeight;
+
+    const alignChunks: AlignChunk[] = [];
+    const markChunks: MergeMarkChunk[] = [];
+    model.forEach((chunk, index) => {
+      const span = spans[index];
+      const from = Math.min(span?.from ?? 0, doc.length);
+      const to = Math.min(Math.max(span?.to ?? from, from), doc.length);
+      const covered = lineSpan(doc, from, to);
+      const first = covered?.first ?? doc.lineAt(from).number - 1;
+      // An empty span covers no line, which is `last` one before `first`.
+      const last = covered?.last ?? first - 1;
+      const lines =
+        chunk.kind === "conflict"
+          ? // Sliced for conflicts only: that is the one kind whose *text* decides
+            // where the padding goes, and slicing every chunk would mean a
+            // document's worth of strings on every keystroke.
+            Array.from({ length: last - first + 1 }, (_, offset) => doc.line(first + offset + 1).text)
+          : undefined;
+      alignChunks.push({
+        kind: chunk.kind,
+        ours: chunk.ours.end - chunk.ours.start,
+        theirs: chunk.theirs.end - chunk.theirs.start,
+        result: last - first + 1,
+        lines,
+      });
+      markChunks.push({
+        kind: chunk.kind,
+        from,
+        to,
+        // A conflict counts as decided once its opener is gone, which is git's own
+        // definition and the one the toolbar count and the write path both use.
+        resolved: lines !== undefined && !lines.some(isConflictStart),
+      });
+    });
+
+    const alignment = alignPanes(alignChunks, {
+      ours: views.current.ours?.state.doc.lines ?? 0,
+      result: doc.lines,
+      theirs: views.current.theirs?.state.doc.lines ?? 0,
+    });
+
+    // The line height is part of what is compared, not just the padding: a font
+    // change moves every spacer without moving a single line.
+    const previous = alignedRef.current;
+    const remeasured = previous === null || previous.lineHeight !== lineHeight;
+    for (const pane of PANES) {
+      const view = views.current[pane];
+      if (!view) continue;
+      if (!remeasured && sameSpacers(previous.alignment[pane], alignment[pane])) continue;
+      view.dispatch({
+        effects: setSpacers.of(spacerDecorations(view, alignment[pane], lineHeight)),
+      });
     }
+    alignedRef.current = { lineHeight, alignment };
+
+    // Measured after the padding is in, so the marks describe the aligned content.
+    // The dispatch above changes the geometry, which asks for another pass through
+    // the update listener; that one finds nothing to change and settles.
+    const geometry = {
+      top: (position: number) => result.lineBlockAt(position).top,
+      bottom: (position: number) => result.lineBlockAt(position).bottom,
+      contentHeight: result.contentHeight,
+    };
+    setStripes((current) => {
+      const next = computeMergeStripes(markChunks, geometry);
+      return sameStripes(current, next) ? current : next;
+    });
   }, []);
+
+  /**
+   * Ask for a recompute, once, as soon as the current update has finished.
+   *
+   * A microtask rather than an animation frame, which is what `DiffPane` uses and
+   * what `@codemirror/merge` uses for its own spacers, and the difference is
+   * deliberate:
+   *
+   * - It has to leave the update cycle. The recompute dispatches into all three
+   *   editors, and doing that from inside one of their update listeners is not
+   *   allowed.
+   * - It must not wait for a frame. The padding would then be one frame behind the
+   *   text, so the side panes would sit visibly out of step by however many lines
+   *   were just typed, which is exactly what this part exists to stop.
+   * - Nothing here forces a layout. The three numbers it reads — the default line
+   *   height, the content height, a line block's top — come from CodeMirror's
+   *   height map rather than the DOM, so there is no `getBoundingClientRect` cost
+   *   to amortise onto a frame, which is the reason the diff window's map waits for
+   *   one. When a font change *does* need a fresh measurement, it reaches this
+   *   through `geometryChanged` once CodeMirror has taken it.
+   */
+  const remeasure = useCallback(() => {
+    if (pendingRef.current) return;
+    pendingRef.current = true;
+    queueMicrotask(() => {
+      pendingRef.current = false;
+      // A recompute queued just before unmount finds no views and does nothing.
+      measureNow();
+    });
+  }, [measureNow]);
 
   /** Replace a chunk's span in the result buffer with one side's lines. */
   const apply = useCallback((chunkIndex: number, side: ChunkSide) => {
@@ -285,14 +505,33 @@ export function MergePanes({ path, stages, value, onChange, busy }: MergePanesPr
           : previousConflictLine(text, cursorLine);
       if (target === null) return;
       const line = view.state.doc.line(Math.min(target + 1, view.state.doc.lines));
+      // The other two panes need no telling: one container scrolls all three, and
+      // CodeMirror walks up to it for `scrollIntoView` itself.
       view.dispatch({ selection: { anchor: line.from }, scrollIntoView: true });
       view.focus();
-      // The other two follow proportionally — the best that can be done without
-      // filler blocks to align on.
-      mirrorFrom("result");
     },
-    [mirrorFrom],
+    [],
   );
+
+  /**
+   * Scroll a chunk into view without moving the cursor, for a click on the map.
+   *
+   * Through CodeMirror's own effect rather than by assigning `scrollTop`: the
+   * scroller is an ancestor of the editor here, and `scrollIntoView` is what knows
+   * how to walk up to it. The margin keeps the chunk off the top edge, under the
+   * sticky pane headers.
+   */
+  const seek = useCallback((index: number) => {
+    const view = views.current.result;
+    const field = tracked.current;
+    if (!view || !field) return;
+    const span = view.state.field(field)[index];
+    if (!span) return;
+    const position = Math.min(span.from, view.state.doc.length);
+    view.dispatch({ effects: EditorView.scrollIntoView(position, { y: "start", yMargin: 24 }) });
+  }, []);
+
+  const chunkAt = useCallback((fraction: number) => stripeAt(stripes, fraction), [stripes]);
 
   // --- editor construction ------------------------------------------------
   useEffect(() => {
@@ -326,6 +565,7 @@ export function MergePanes({ path, stages, value, onChange, busy }: MergePanesPr
           extensions: [
             ...paneExtensions(currentAppearance()?.theme ?? DEFAULT_THEME),
             ...readOnlyExtensions(),
+            spacerField,
             sideDecorationField(model, side),
             gutter({
               class: "isabuild-arrow-gutter",
@@ -357,6 +597,7 @@ export function MergePanes({ path, stages, value, onChange, busy }: MergePanesPr
         extensions: [
           ...paneExtensions(currentAppearance()?.theme ?? DEFAULT_THEME),
           field,
+          spacerField,
           markerHighlight,
           history(),
           // Not `defaultKeymap`: see PANE_KEYMAP for the keystroke that would
@@ -373,6 +614,12 @@ export function MergePanes({ path, stages, value, onChange, busy }: MergePanesPr
               );
               setCurrentChunk(at?.index ?? null);
             }
+            // Every edit moves a chunk boundary, and every geometry change moves
+            // the marks. Both are asked for rather than done here: the recompute
+            // dispatches into all three editors, which is not something to do from
+            // inside one of their update cycles. See `remeasure` for why that is a
+            // microtask and not a frame.
+            if (update.docChanged || update.geometryChanged) remeasure();
           }),
         ],
       }),
@@ -389,23 +636,20 @@ export function MergePanes({ path, stages, value, onChange, busy }: MergePanesPr
       )?.index ?? null,
     );
 
-    // Scroll listeners go on each scroller directly: `scroll` does not bubble, so
-    // CodeMirror's own domEventHandlers (which register on the editor root) never
-    // see it.
-    const detach = (["ours", "result", "theirs"] as PaneName[]).map((name) => {
-      const scroller = views.current[name]?.scrollDOM;
-      const listener = () => mirrorFrom(name);
-      scroller?.addEventListener("scroll", listener, { passive: true });
-      return () => scroller?.removeEventListener("scroll", listener);
-    });
+    // Aligned before the first paint, so the panes are never seen out of step. The
+    // line height is an estimate until CodeMirror has measured the font; when the
+    // measurement disagrees, its own update carries `geometryChanged` and the
+    // listener above asks for the correction.
+    measureNow();
 
     return () => {
-      for (const remove of detach) remove();
+      pendingRef.current = false;
+      alignedRef.current = null;
       for (const view of live) view.destroy();
       views.current = {};
       tracked.current = null;
     };
-  }, [apply, mirrorFrom]);
+  }, [apply, measureNow, remeasure]);
 
   // Conflict navigation from the keyboard. Registered here rather than in the
   // window because `goToConflict` needs the live result view, and the window
@@ -419,24 +663,28 @@ export function MergePanes({ path, stages, value, onChange, busy }: MergePanesPr
   //
   // The *font* arrives through CSS custom properties (see editor/codemirror's
   // theme), so it needs no transaction at all — but CodeMirror caches the
-  // character width it measured at startup, and a stale cache puts the cursor,
-  // the chunk gutter arrows and the scroll sync at the wrong offsets, so each
-  // view is asked to re-measure.
+  // character width it measured at startup, and a stale cache puts the cursor and
+  // the chunk gutter arrows at the wrong offsets, so each view is asked to
+  // re-measure. A font *size* change also changes how tall a line is, which is the
+  // one number the alignment takes from the DOM, hence the recompute.
   //
   // The *colours* cannot come from CSS: the highlight style is compiled into
   // CodeMirror's own stylesheet and the chunk tints are theme rules, so both
-  // compartments are reconfigured in one transaction per view.
+  // compartments are reconfigured in one transaction per view. The change map
+  // holds the colours it was handed, so it re-renders from the new theme too.
   useEffect(
     () =>
       onAppearance((appearance) => {
+        setTheme(appearance.theme);
         const spec = themeTransaction(appearance.theme);
         for (const view of Object.values(views.current)) {
           if (!view) continue;
           view.dispatch(spec);
           view.requestMeasure();
         }
+        remeasure();
       }),
-    [],
+    [remeasure],
   );
 
   // Adopt text the window decided to push in — a reload it judged safe, or the
@@ -559,31 +807,34 @@ export function MergePanes({ path, stages, value, onChange, busy }: MergePanesPr
     <div className="merge-panes">
       <EditorToolbar items={items} label="Conflict actions" />
 
-      <div className="merge-grid">
-        <section className="merge-pane">
-          {/* git's own marker label, shown verbatim and never interpreted. */}
-          <header className="merge-pane-header merge-pane-header--ours">
-            {stages.oursLabel || "ours"} (mine)
-          </header>
-          <div className="merge-pane-editor" ref={oursHost} data-testid="pane-ours" />
-        </section>
-        <section className="merge-pane">
-          <header className="merge-pane-header merge-pane-header--result">Result</header>
-          <div className="merge-pane-editor" ref={resultHost} data-testid="pane-result" />
-        </section>
-        <section className="merge-pane">
-          <header className="merge-pane-header merge-pane-header--theirs">
-            {stages.theirsLabel || "theirs"} (theirs)
-          </header>
-          <div className="merge-pane-editor" ref={theirsHost} data-testid="pane-theirs" />
-        </section>
+      <div className="merge-editor-row">
+        {/* One scroller around all three panes, which is what "aligned" means
+            here: there is no sync to get wrong because there is one scroll
+            position. The headers are sticky rows of the same grid, so they stay
+            over their own column however wide the window is. */}
+        <div className="merge-scroll" data-testid="merge-scroll">
+          <div className="merge-grid">
+            {/* git's own marker labels, shown verbatim and never interpreted. */}
+            <header className="merge-pane-header merge-pane-header--ours">
+              {stages.oursLabel || "ours"} (mine)
+            </header>
+            <header className="merge-pane-header merge-pane-header--result">Result</header>
+            <header className="merge-pane-header merge-pane-header--theirs">
+              {stages.theirsLabel || "theirs"} (theirs)
+            </header>
+            <div className="merge-pane-editor" ref={oursHost} data-testid="pane-ours" />
+            <div className="merge-pane-editor" ref={resultHost} data-testid="pane-result" />
+            <div className="merge-pane-editor" ref={theirsHost} data-testid="pane-theirs" />
+          </div>
+        </div>
+        <OverviewRuler
+          stripes={stripes}
+          colors={mergeMarkColors(theme)}
+          labels={MERGE_MARK_LABELS}
+          onSeek={seek}
+          chunkAt={chunkAt}
+        />
       </div>
     </div>
   );
-}
-
-/** Line height in pixels, for the scroll tolerance. Falls back to a sane guess. */
-function lineHeightOf(scroller: HTMLElement): number {
-  const parsed = Number.parseFloat(getComputedStyle(scroller).lineHeight);
-  return Number.isFinite(parsed) && parsed > 0 ? parsed : 18;
 }
