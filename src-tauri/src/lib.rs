@@ -17,6 +17,7 @@ pub mod spawn;
 pub mod testrepo;
 pub mod watcher;
 pub mod watchfilter;
+pub mod watchtree;
 
 use gitops::GitOps;
 use menu::MenuState;

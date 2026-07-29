@@ -50,9 +50,11 @@
 //! module has no `notify` and no Tauri dependency (the same property `watcher`
 //! itself keeps) and every rule can be unit-tested against a path literal.
 //!
-//! One thing this does *not* fix: the number of directories the OS is asked to
-//! watch. See the README's known limitations, and the roadmap's "Watch only what
-//! matters".
+//! The same verdicts also decide **what the OS is asked to watch at all**, which
+//! is [`WatchFilter::watchable_dirs`] and [`crate::watchtree`]'s half of the work:
+//! an ignored directory costs no kernel watch either, not just no refresh. That
+//! only applies where the watch is assembled per directory (Linux); elsewhere one
+//! recursive watch covers the root and this module is the only filter there is.
 
 use std::collections::hash_map::Entry;
 use std::collections::{BTreeSet, HashMap, HashSet};
@@ -69,6 +71,21 @@ use crate::SAVE_TEMP_PREFIX;
 /// that a normal repo never reaches it, since the ancestor chains of a build
 /// directory collapse to a handful of entries.
 const MAX_VERDICTS: usize = 8192;
+
+/// Ceiling on remembered [`Stamp`]s, which is a different quantity from the
+/// verdicts and needs a different bound.
+///
+/// A verdict is cached per *ancestor chain*, so a build directory collapses to a
+/// handful of entries and 8,192 is generous. A stamp is per **file**, and the
+/// walk primes every file it passes, so sharing the verdict cap meant any
+/// repository with more than 8,192 unignored files filled and flushed the map
+/// repeatedly during its own arming — leaving an arbitrary tail and undoing the
+/// silence priming exists to buy, at exactly the scale this all matters. One
+/// entry is a slug plus four integers, so this bound is a few MB at worst.
+///
+/// Above it, arming is no longer silent: the first `git status` reads paths that
+/// were flushed, and the cascade settles after one extra cycle instead of none.
+const MAX_STAMPS: usize = 131_072;
 
 /// Files git writes at most **once per user-initiated operation**, each of which
 /// changes something the UI renders.
@@ -100,6 +117,9 @@ const GIT_STATE_FILES: &[&str] = &[
 /// `refs/` stays empty and a branch or tag update rewrites `reftable/*` instead. A
 /// commit would still be caught through the index, but `git branch` and a fetch
 /// would not.
+/// The index, named because [`WatchFilter::index_moved`] singles it out.
+const GIT_INDEX: &str = ".git/index";
+
 const GIT_STATE_DIRS: &[&str] = &[
     "refs",
     "reftable",
@@ -185,6 +205,12 @@ pub struct WatchFilter {
     /// is that this stops growing, which is a thing tests can assert with no
     /// timing at all.
     queries: u64,
+    /// Bumped every time the ignore rules themselves may have moved. See
+    /// [`WatchFilter::generation`].
+    generation: u64,
+    /// Whether the last batch held a real write to `.git/index`. See
+    /// [`WatchFilter::index_moved`].
+    index_moved: bool,
 }
 
 impl WatchFilter {
@@ -202,6 +228,8 @@ impl WatchFilter {
             stamps: HashMap::new(),
             refused: HashSet::new(),
             queries: 0,
+            generation: 0,
+            index_moved: false,
         }
     }
 
@@ -213,6 +241,7 @@ impl WatchFilter {
         let mut refresh = false;
         let mut invalidate = false;
         let mut ask: Vec<String> = Vec::new();
+        self.index_moved = false;
 
         for path in paths {
             match self.mapped(path) {
@@ -230,7 +259,13 @@ impl WatchFilter {
                     // Both rule verdicts are gated on the file having actually
                     // moved, because our own reads reach us as events. See
                     // `changed_on_disk`.
-                    Verdict::Refresh => refresh |= self.changed_on_disk(&slug),
+                    Verdict::Refresh => {
+                        let moved = self.changed_on_disk(&slug);
+                        if moved && slug == GIT_INDEX {
+                            self.index_moved = true;
+                        }
+                        refresh |= moved;
+                    }
                     Verdict::RefreshAndInvalidate => {
                         if self.changed_on_disk(&slug) {
                             refresh = true;
@@ -273,7 +308,7 @@ impl WatchFilter {
         // Invalidate before the early return, so a batch holding both a real
         // change and a `.gitignore` edit cannot leave stale verdicts behind.
         if invalidate {
-            self.verdicts.clear();
+            self.forget_verdicts();
         }
         if refresh {
             return true;
@@ -286,7 +321,133 @@ impl WatchFilter {
     /// not know what we missed and one of the lost events may have been a
     /// `.gitignore` write.
     pub fn invalidate(&mut self) {
+        self.forget_verdicts();
+    }
+
+    /// How many times the ignore rules may have moved under us.
+    ///
+    /// A caller holding state *derived* from those verdicts — which is
+    /// [`crate::watchtree`], holding the set of directories worth watching —
+    /// cannot tell from a refresh alone that un-ignoring `build/` means it now has
+    /// a directory to arm. Comparing this across a batch tells it.
+    ///
+    /// Deliberately **not** bumped by the [`MAX_VERDICTS`] eviction flush: that is
+    /// the cache filling up, not the rules changing, and rebuilding the watch set
+    /// every time a storm overflows the cache would be a storm of its own.
+    pub fn generation(&self) -> u64 {
+        self.generation
+    }
+
+    /// Whether the last batch held a **write** to `.git/index`, as opposed to any
+    /// of the reads of it that reach us as events.
+    ///
+    /// The distinction is the whole value of this, and getting it wrong is a
+    /// subprocess loop rather than a wasted check. `.git` is watched, inotify's
+    /// mask includes `OPEN`, and the answer to "did the index move" that
+    /// [`crate::watchtree::WatchTree::forced_changed`] gives runs `git ls-files`,
+    /// which *opens the index*. Keyed on the path merely appearing, that open is
+    /// the next batch, which asks again, at two spawns per debounce window for as
+    /// long as the project is open — and invisible, because none of it refreshes
+    /// anything. Keyed on the stamp actually moving, a read answers nothing and
+    /// the loop cannot start.
+    ///
+    /// Reported from here rather than recomputed by the caller because
+    /// `should_refresh` has already taken the stamp: asking again afterwards would
+    /// always say no, since the transition it would compare against is the one
+    /// just consumed.
+    pub fn index_moved(&self) -> bool {
+        self.index_moved
+    }
+
+    /// Discard every verdict *because the rules may have changed*, which is the
+    /// distinction [`WatchFilter::generation`] exists to publish.
+    fn forget_verdicts(&mut self) {
         self.verdicts.clear();
+        self.generation += 1;
+    }
+
+    /// Record what `paths` look like right now, deciding nothing.
+    ///
+    /// The walk that arms the watches uses this so that arming stays silent. A
+    /// path with no remembered [`Stamp`] counts as changed the first time it is
+    /// seen, so without priming, the first `git status` after a project opens
+    /// would have its own `OPEN` events read back as writes and answer itself —
+    /// the loop [`WatchFilter::changed_on_disk`] exists to close, re-opened at the
+    /// one moment nothing has been stamped yet.
+    ///
+    /// Recording goes through `changed_on_disk` for its side effect rather than
+    /// touching `stamps` directly, so priming and event handling can never
+    /// disagree about what a stamp is or when the cap flushes.
+    pub fn prime<'a, I>(&mut self, paths: I)
+    where
+        I: IntoIterator<Item = &'a Path>,
+    {
+        for path in paths {
+            match self.mapped(path) {
+                Mapped::Root => {
+                    self.changed_on_disk("");
+                }
+                Mapped::Inside(slug) => {
+                    self.changed_on_disk(&slug);
+                }
+                // Nothing to key a stamp on. It will refresh when it arrives,
+                // which is the safe direction and what it would have done anyway.
+                Mapped::Unmappable => {}
+            }
+        }
+    }
+
+    /// Which of `slugs` — directories, all from one level of the tree — are worth
+    /// an OS-level watch.
+    ///
+    /// One `check-ignore` for the whole level, which is what makes the walk
+    /// affordable *and* what folds in the arming replay: every verdict it learns
+    /// is the same cached verdict `should_refresh` would otherwise have paid for
+    /// later, ancestors included.
+    ///
+    /// Watching is the safe direction, so anything git will not classify — a
+    /// submodule, where `check-ignore` exits 128 — is kept.
+    pub fn watchable_dirs(&mut self, slugs: &[String]) -> Vec<String> {
+        // Collect the whole level's unknowns first, so the question is asked once.
+        let mut pending: BTreeSet<String> = BTreeSet::new();
+        for slug in slugs {
+            if watch_git_dir(slug).is_some() {
+                continue; // a pure rule; git has no opinion about its own gitdir
+            }
+            if self.refused.contains(slug.as_str()) || self.has_refused_ancestor(slug) {
+                continue; // already settled as "watch it"
+            }
+            if self.has_ignored_ancestor(slug) || self.verdicts.contains_key(slug.as_str()) {
+                continue;
+            }
+            for prefix in ancestors_and_self(slug) {
+                if !self.verdicts.contains_key(&prefix) {
+                    pending.insert(prefix);
+                }
+            }
+        }
+        if !pending.is_empty() {
+            self.query(pending);
+        }
+        // Now every answer is a hash lookup, and the result keeps the caller's
+        // order so a test can assert an exact set.
+        slugs
+            .iter()
+            .filter(|slug| self.watchable(slug))
+            .cloned()
+            .collect()
+    }
+
+    fn watchable(&self, slug: &str) -> bool {
+        match watch_git_dir(slug) {
+            Some(keep) => keep,
+            None => {
+                if self.refused.contains(slug) || self.has_refused_ancestor(slug) {
+                    return true;
+                }
+                !self.is_ignored(slug)
+            }
+        }
     }
 
     /// Whether `slug` looks different on disk from the last time we looked here.
@@ -312,7 +473,7 @@ impl WatchFilter {
     /// question worth asking everywhere, and it costs one `stat`.
     fn changed_on_disk(&mut self, slug: &str) -> bool {
         let stamp = stamp_of(&self.root.join(slug));
-        if self.stamps.len() > MAX_VERDICTS {
+        if self.stamps.len() > MAX_STAMPS {
             self.stamps.clear();
         }
         match self.stamps.entry(slug.to_string()) {
@@ -605,6 +766,37 @@ fn classify_git_dir(rest: &str) -> Verdict {
         return Verdict::Refresh;
     }
     Verdict::Drop
+}
+
+/// Whether a **directory** at or under `.git` is worth an OS-level watch.
+/// `None` when the slug is not a `.git` path at all, where only git can answer.
+///
+/// The mirror of [`classify_git_dir`], and it has to stay one: watching a
+/// directory whose every event that rule drops buys nothing, and *not* watching
+/// one it acts on loses the event entirely. This is where the bulk of the saving
+/// is — `objects` alone is 256 fanout directories plus `pack`, which is 255 of
+/// the 264 directories under `.git` in this checkout.
+fn watch_git_dir(slug: &str) -> Option<bool> {
+    let rest = git_dir_relative(slug)?;
+    // The gitdir itself. `index`, `HEAD`, `ORIG_HEAD`, `MERGE_HEAD`, `FETCH_HEAD`
+    // and `packed-refs` are all written directly into it, so this single watch is
+    // the reason staging in the terminal refreshes the panel.
+    if rest.is_empty() {
+        return Some(true);
+    }
+    // Not ref state, but `info/exclude` is `RefreshAndInvalidate` and the only
+    // route to that event is a watch on the directory holding it.
+    if rest == "info" {
+        return Some(true);
+    }
+    // `refs/heads/feature/x`: a first-component test, matching the rule that
+    // decides the events.
+    if GIT_STATE_DIRS.contains(&first_component(rest)) {
+        return Some(true);
+    }
+    // `objects`, `logs`, `hooks`, `modules`, `worktrees`: every event they can
+    // produce is dropped, so a watch on them is pure cost.
+    Some(false)
 }
 
 fn first_component(slug: &str) -> &str {
@@ -1145,8 +1337,238 @@ mod tests {
         // Even though git does report it.
         assert!(!crate::testrepo::porcelain(dir.path()).is_empty());
 
-        // A flush is all it takes to agree with git again.
+        // A flush is all it takes to agree with git again. In the running app
+        // `watchtree` performs one as soon as an index write changes the set of
+        // force-added files, so this window closes on the `git add -f` itself.
         filter.invalidate();
         assert!(sees(&mut filter, dir.path(), &["ignored/keep.txt"]));
+    }
+
+    /// `watchable_dirs` over slugs that never reach git, so a fake root is enough
+    /// and an answer here proves no subprocess was spawned.
+    fn watchable(slugs: &[&str]) -> Vec<String> {
+        let owned: Vec<String> = slugs.iter().map(|slug| (*slug).to_string()).collect();
+        let mut filter = WatchFilter::new(Path::new("/repo"));
+        let kept = filter.watchable_dirs(&owned);
+        assert_eq!(filter.queries(), 0, "the .git rules must not ask git");
+        kept
+    }
+
+    #[test]
+    fn the_gitdir_and_its_state_directories_are_watchable() {
+        // `.git` itself carries index/HEAD/FETCH_HEAD/packed-refs, `info` carries
+        // `info/exclude`, and refs live under the state directories. Between them
+        // these are every `.git` event the filter acts on.
+        let dirs = [
+            ".git",
+            ".git/info",
+            ".git/refs",
+            ".git/refs/heads",
+            ".git/refs/heads/feature",
+            ".git/refs/remotes/origin",
+            ".git/refs/tags",
+            ".git/reftable",
+            ".git/rebase-merge",
+            ".git/rebase-apply",
+            ".git/sequencer",
+        ];
+        assert_eq!(watchable(&dirs), dirs.to_vec());
+    }
+
+    #[test]
+    fn the_bulk_of_the_gitdir_is_not_watchable() {
+        // Where the saving is: 255 of the 264 directories under `.git` in this
+        // checkout. Every event any of these can produce is dropped by
+        // `classify_git_dir`, so a watch on them buys precisely nothing.
+        for slug in [
+            ".git/objects",
+            ".git/objects/ab",
+            ".git/objects/pack",
+            ".git/logs",
+            ".git/logs/refs/heads",
+            ".git/hooks",
+            ".git/branches",
+            ".git/modules",
+            ".git/modules/sub",
+            ".git/modules/sub/objects",
+            ".git/worktrees",
+            ".git/worktrees/other",
+            ".git/lfs",
+        ] {
+            assert!(watchable(&[slug]).is_empty(), "{slug} must not be watched");
+        }
+    }
+
+    #[test]
+    fn an_ignored_directory_is_not_watchable_while_its_siblings_are() {
+        let dir = repo_ignoring(
+            "node_modules/\ntarget/\n",
+            &["node_modules", "target", "src"],
+        );
+        let mut filter = WatchFilter::new(dir.path());
+
+        let level: Vec<String> = ["node_modules", "src", "target"]
+            .iter()
+            .map(|slug| (*slug).to_string())
+            .collect();
+        assert_eq!(filter.watchable_dirs(&level), vec!["src".to_string()]);
+    }
+
+    #[test]
+    fn a_whole_level_costs_one_question() {
+        // The fold-in of the arming replay, asserted with no timing at all: the
+        // walk pays one `check-ignore` per level of the tree, not one per
+        // directory, and the verdicts it warms are the ones `should_refresh` would
+        // otherwise have paid for later.
+        let names: Vec<String> = (0..40).map(|index| format!("d{index}")).collect();
+        let borrowed: Vec<&str> = names.iter().map(String::as_str).collect();
+        let dir = repo_ignoring("d7/\n", &borrowed);
+        let mut filter = WatchFilter::new(dir.path());
+
+        let kept = filter.watchable_dirs(&names);
+        assert_eq!(kept.len(), names.len() - 1);
+        assert!(!kept.contains(&"d7".to_string()));
+        assert_eq!(filter.queries(), 1, "one question for the whole level");
+
+        // And a second level below a known-good directory reuses those verdicts.
+        let deeper: Vec<String> = vec!["d1/inner".to_string()];
+        assert_eq!(filter.watchable_dirs(&deeper), deeper);
+        assert_eq!(filter.queries(), 2);
+    }
+
+    #[test]
+    fn a_directory_git_refuses_to_classify_is_watched() {
+        // A submodule: `check-ignore` exits 128 rather than answering. Not knowing
+        // has to mean watching, for the same reason it means refreshing.
+        let dir = repo_ignoring("ignored/\n", &["ignored"]);
+        let inner = repo_with_commit("inner.txt", "one\n");
+        git_in(
+            dir.path(),
+            &[
+                "-c",
+                "protocol.file.allow=always",
+                "submodule",
+                "add",
+                "-q",
+                &inner.path().to_string_lossy(),
+                "sub",
+            ],
+        );
+        commit(dir.path(), "add submodule");
+        let mut filter = WatchFilter::new(dir.path());
+
+        let level = vec!["sub".to_string()];
+        assert_eq!(filter.watchable_dirs(&level), level);
+        // Remembered, so the walk does not re-ask for every directory beneath it.
+        let asked = filter.queries();
+        assert_eq!(filter.watchable_dirs(&level), level);
+        assert_eq!(filter.queries(), asked);
+    }
+
+    #[test]
+    fn priming_makes_a_first_sighting_silent() {
+        // What keeps arming quiet. Unprimed, the first event naming a path is a
+        // change by definition, so the first `git status` after mount would read
+        // its own `OPEN` events back as writes.
+        let dir = repo_with_commit("file.txt", "one\n");
+        let target = dir.path().join("file.txt");
+
+        let mut cold = WatchFilter::new(dir.path());
+        assert!(sees(&mut cold, dir.path(), &["file.txt"]));
+
+        let mut primed = WatchFilter::new(dir.path());
+        primed.prime([target.as_path()]);
+        assert!(!sees(&mut primed, dir.path(), &["file.txt"]));
+
+        // And a real write still gets through.
+        write(dir.path(), "file.txt", "two\n");
+        assert!(sees(&mut primed, dir.path(), &["file.txt"]));
+    }
+
+    #[test]
+    fn reading_the_index_does_not_report_it_as_moved() {
+        // The regression guard for a subprocess loop, and it needs no timing.
+        // `watchtree` answers `index_moved` with a `git ls-files`, which *opens*
+        // the index; inotify reports opens, so if a read counted as a move, that
+        // answer would ask the question again, twice a debounce window, forever —
+        // and invisibly, because none of it refreshes anything.
+        let dir = repo_with_commit("file.txt", "one\n");
+        let mut filter = WatchFilter::new(dir.path());
+
+        // First sighting: a move, because we have never looked.
+        assert!(sees(&mut filter, dir.path(), &[".git/index"]));
+        assert!(filter.index_moved());
+
+        // A read of it is not.
+        let _ = std::fs::read(dir.path().join(".git/index")).expect("read");
+        assert!(!sees(&mut filter, dir.path(), &[".git/index"]));
+        assert!(!filter.index_moved(), "a read must not look like a write");
+
+        // A real write is.
+        git_in(dir.path(), &["add", "-A"]);
+        write(dir.path(), "another.txt", "two\n");
+        git_in(dir.path(), &["add", "another.txt"]);
+        assert!(sees(&mut filter, dir.path(), &[".git/index"]));
+        assert!(filter.index_moved());
+
+        // And it is scoped to the batch that carried it, not sticky. Whether this
+        // batch refreshes is beside the point (a first sighting of `file.txt`
+        // does); that it no longer claims the index moved is not.
+        let _ = sees(&mut filter, dir.path(), &["file.txt"]);
+        assert!(!filter.index_moved());
+    }
+
+    #[test]
+    fn priming_an_unmappable_path_is_ignored() {
+        let dir = repo_with_commit("file.txt", "one\n");
+        let mut filter = WatchFilter::new(dir.path());
+        filter.prime([Path::new("/somewhere/else/entirely")]);
+        // Still refreshes when it arrives, which is the safe direction.
+        assert!(sees(&mut filter, dir.path(), &["file.txt"]));
+    }
+
+    #[test]
+    fn generation_moves_when_the_rules_move() {
+        let dir = repo_ignoring("ignored/\n", &["ignored"]);
+        let mut filter = WatchFilter::new(dir.path());
+        let start = filter.generation();
+
+        // A batch that changes nothing about the rules.
+        assert!(!sees(&mut filter, dir.path(), &["ignored/a"]));
+        assert_eq!(filter.generation(), start);
+
+        // A `.gitignore` write, which is how `build/` stops being ignored.
+        write(dir.path(), ".gitignore", "other/\n");
+        assert!(sees(&mut filter, dir.path(), &[".gitignore"]));
+        assert!(filter.generation() > start, "a rule change must be visible");
+
+        // As is a lost batch, where one of the events we missed may have been one.
+        let after = filter.generation();
+        filter.invalidate();
+        assert!(filter.generation() > after);
+    }
+
+    #[test]
+    fn generation_does_not_move_on_a_cache_flush() {
+        // The distinction the whole field exists for: the cache filling up is not
+        // the rules changing, and re-planning the watch set every time a storm
+        // overflows the cache would be a storm of its own.
+        let dir = repo_ignoring("ignored/\n", &["ignored"]);
+        let mut filter = WatchFilter::new(dir.path());
+        assert!(!sees(&mut filter, dir.path(), &["ignored/a"]));
+        let start = filter.generation();
+        let warm = filter.queries();
+
+        let names: Vec<String> = (0..=MAX_VERDICTS)
+            .map(|index| format!("d{index}"))
+            .collect();
+        let paths: Vec<PathBuf> = names.iter().map(|name| dir.path().join(name)).collect();
+        filter.should_refresh(paths.iter().map(|path| path.as_path()));
+
+        // The flush happened — the earlier verdict has to be asked for again —
+        // and the generation did not move with it.
+        assert!(!sees(&mut filter, dir.path(), &["ignored/a"]));
+        assert!(filter.queries() > warm + 1, "the cap must have flushed");
+        assert_eq!(filter.generation(), start);
     }
 }

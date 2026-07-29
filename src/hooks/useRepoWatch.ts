@@ -43,7 +43,18 @@ export function useRepoWatch(): void {
       // A watch failure is non-fatal — the panel still shows the initial
       // status, it just won't live-update.
       try {
-        await startWatch(root);
+        const summary = await startWatch(root);
+        // A *partial* watch is the one worth saying something about: the panel
+        // updates for some of the tree and silently not for the rest, which is
+        // indistinguishable from a working one. The usual cause is an exhausted
+        // inotify budget (`fs.inotify.max_user_watches`).
+        if (summary.failed > 0) {
+          console.warn(
+            `isabuild: watching ${summary.watched} directories, ` +
+              `${summary.failed} refused. Changes in part of this repository ` +
+              `will not refresh the panel.`,
+          );
+        }
       } catch {
         /* ignore */
       }

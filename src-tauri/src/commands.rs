@@ -22,7 +22,7 @@ use crate::pty::{PtyEvent, PtyManager, SpawnParams};
 use crate::remote::{self, OpEvent, RemoteOpSpec};
 use crate::settings::{Settings, SettingsPatch, SettingsStore};
 use crate::spawn::{default_cwd, joined_command, shell_spec};
-use crate::watcher::GitWatcher;
+use crate::watcher::{GitWatcher, WatchSummary};
 
 #[derive(serde::Serialize, Clone)]
 #[serde(rename_all = "camelCase")]
@@ -593,12 +593,15 @@ pub async fn git_commit_path(
 
 /// (Re)start the debounced file watcher on `repo_root`; changes there emit
 /// `repo://changed`, which the frontend answers by re-requesting `git_status`.
+///
+/// Returns how much of the tree the watch actually covers. Arming is per
+/// directory on Linux, so it can succeed partially — see [`WatchSummary`].
 #[tauri::command]
 pub async fn git_watch(
     app: AppHandle,
     watcher: State<'_, GitWatcher>,
     repo_root: String,
-) -> Result<(), String> {
+) -> Result<WatchSummary, String> {
     watcher
         .watch(
             move || {
