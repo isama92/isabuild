@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.5.0](https://github.com/isama92/isabuild/compare/v0.4.0...v0.5.0) (2026-07-29)
+
+
+### Features
+
+* part 1 — align the merge panes ([#21](https://github.com/isama92/isabuild/issues/21)) ([859e28d](https://github.com/isama92/isabuild/commit/859e28d2d48b43427af89cfb2cc69f7ffcac4416))
+
 ## [0.4.0](https://github.com/isama92/isabuild/compare/v0.3.0...v0.4.0) (2026-07-29)
 
 
