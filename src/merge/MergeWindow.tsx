@@ -24,9 +24,11 @@
 //   file that is fully decided but not staged: neither is on disk anywhere, so both
 //   go with the window. This is what `merge.json` needs `core:window:allow-destroy`
 //   for.
-// - **A refused write is a dead end only until something changes.** The button can
-//   simply be pressed again, which is why nothing here has to guard against a write
-//   retrying itself; the effect that needed that guard is gone.
+// - **A refusal is the user's to answer, not ours to retry.** The button stays, so a
+//   refusal the file has moved past is one more press away, and nothing here has to
+//   guard against a write retrying itself; the effect that needed that guard is gone.
+//   The one refusal a second press cannot fix is a stale revision, which is why the
+//   notice for that case sends the user to Reload it rather than to the button.
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { MergePanes } from "./MergePanes";
@@ -92,6 +94,15 @@ export function MergeWindow() {
    * a fresh `getConflictStages` says nothing about it either way.
    */
   const refusedRef = useRef<string | null>(null);
+  /**
+   * Whether a write is in flight, for `commit`'s own re-entrancy guard.
+   *
+   * The `busy` state cannot serve: it is captured at render, so two clicks landing
+   * in one render would both see `false`. The button is disabled while busy, which
+   * makes this belt and braces, but `chooseWholeFile` guards its write and these two
+   * are siblings.
+   */
+  const busyRef = useRef(false);
 
   const outstanding = buffer === null ? 0 : countConflictMarkers(buffer);
 
@@ -140,6 +151,13 @@ export function MergeWindow() {
     touchedRef.current = false;
     setTouched(false);
     refusedRef.current = null;
+    // What was written belonged to the file state being replaced. Keeping it would
+    // outlive its meaning: a conflict recreated in this same window session (`git
+    // checkout --merge`) and then resolved to byte-identical text would compare
+    // equal to it, and the window would decline to offer staging for work that has
+    // never been staged.
+    writtenRef.current = null;
+    setWritten(null);
     if (!isMergeable(fetched)) {
       bufferRef.current = null;
       setBuffer(null);
@@ -222,27 +240,39 @@ export function MergeWindow() {
    *
    * The user's own act, from the notice that appears once every conflict is
    * decided. The revision guard is the backend's, and a refusal (the file moved
-   * under us, a marker we miscounted) surfaces as an error with the buffer intact,
-   * ready to be tried again.
+   * under us, a marker we miscounted) surfaces as an error with the buffer intact.
+   *
+   * **The panes stay editable while this is in flight, deliberately**, and that is
+   * what the guard on clearing `touched` is about. Locking them for the length of
+   * one IPC call would be a cursor that stops taking input for no reason the user
+   * can see; the buffer is theirs throughout. So the text that comes back here may
+   * no longer be the text in the editor, and saying "nothing has been touched" then
+   * would strand that edit: unstageable, because `stageable` needs `touched`, and
+   * dropped with no prompt on close, because the close guard bails on the same flag.
+   * `touched` therefore only clears when the buffer really is what was written.
    */
   const commit = useCallback(
     async (text: string) => {
       const params = target.params;
-      if (!params) return;
+      if (!params || busyRef.current) return;
+      busyRef.current = true;
       setBusy(true);
       try {
         await writeResolved(params.repoRoot, params.path, text, stagesRef.current?.revision ?? "");
         writtenRef.current = text;
         setWritten(text);
         refusedRef.current = null;
-        touchedRef.current = false;
-        setTouched(false);
+        if (bufferRef.current === text) {
+          touchedRef.current = false;
+          setTouched(false);
+        }
         setNotice("Every conflict is resolved, and the file is staged.");
         setError(null);
       } catch (cause) {
         refusedRef.current = text;
         setError(cause instanceof Error ? cause.message : String(cause));
       } finally {
+        busyRef.current = false;
         setBusy(false);
       }
     },
@@ -351,7 +381,8 @@ export function MergeWindow() {
           >
             Reload it
           </button>{" "}
-          to start from what is there now, or carry on and your version will be written.
+          to start from what is there now. Staging what you have will be refused until you do,
+          because it was built on the file as it was.
         </>
       ),
     });

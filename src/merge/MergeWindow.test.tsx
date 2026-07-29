@@ -254,7 +254,11 @@ describe("MergeWindow", () => {
 
       expect(await screen.findByRole("alert")).toHaveTextContent(/changed on disk/);
       expect(screen.getByLabelText("result buffer")).toHaveValue(RESOLVED);
-      // Still offered, because pressing it again is the whole recovery.
+      // Still offered: pressing it again is a fresh attempt, which is the recovery
+      // for a refusal the file itself has moved past. It is *not* the recovery for a
+      // stale revision, where the second attempt sends the same revision and is
+      // refused identically — reloading is. The button being offered either way is
+      // right, because the window cannot tell the two refusals apart.
       expect(screen.getByRole("button", { name: /stage this file/i })).toBeInTheDocument();
     });
 
@@ -277,6 +281,93 @@ describe("MergeWindow", () => {
       // And pressing it again is a fresh attempt.
       fireEvent.click(screen.getByRole("button", { name: /stage this file/i }));
       await waitFor(() => expect(writeResolvedMock).toHaveBeenCalledTimes(2));
+    });
+
+    it("keeps an edit typed while the write was in flight", async () => {
+      // The panes stay editable across the write, deliberately, so this is a race the
+      // model has to answer rather than one it can rule out. Clearing "touched" on
+      // any successful write would strand the newer text: unstageable, because the
+      // offer needs `touched`, and dropped with no prompt on close, because the close
+      // guard bails on the same flag.
+      let finishWrite: () => void = () => undefined;
+      writeResolvedMock.mockImplementation(
+        () =>
+          new Promise((resolve) => {
+            finishWrite = () => resolve({ remaining: 0, staged: true });
+          }),
+      );
+      render(<MergeWindow />);
+      await waitFor(() => expect(screen.getByTestId("panes")).toBeInTheDocument());
+
+      editBuffer(RESOLVED);
+      fireEvent.click(await screen.findByRole("button", { name: /stage this file/i }));
+      await waitFor(() => expect(writeResolvedMock).toHaveBeenCalledTimes(1));
+
+      // Typed while the IPC call is outstanding.
+      const later = RESOLVED.replace("mine", "mine, typed during the write");
+      editBuffer(later);
+      finishWrite();
+      await settle();
+
+      // The newer text can still be staged, and it is what would be written.
+      expect(screen.getByRole("button", { name: /stage this file/i })).toBeInTheDocument();
+      expect(screen.getByLabelText("result buffer")).toHaveValue(later);
+      fireEvent.click(screen.getByRole("button", { name: /stage this file/i }));
+      await waitFor(() =>
+        expect(writeResolvedMock).toHaveBeenLastCalledWith("/repo", "src/app.ts", later, "rev-1"),
+      );
+    });
+
+    it("still asks before closing on an edit typed while the write was in flight", async () => {
+      const confirm = vi.spyOn(window, "confirm").mockReturnValue(false);
+      let finishWrite: () => void = () => undefined;
+      writeResolvedMock.mockImplementation(
+        () =>
+          new Promise((resolve) => {
+            finishWrite = () => resolve({ remaining: 0, staged: true });
+          }),
+      );
+      render(<MergeWindow />);
+      await waitFor(() => expect(screen.getByTestId("panes")).toBeInTheDocument());
+
+      editBuffer(RESOLVED);
+      fireEvent.click(await screen.findByRole("button", { name: /stage this file/i }));
+      editBuffer(RESOLVED.replace("mine", "mine, typed during the write"));
+      finishWrite();
+      await settle();
+
+      const preventDefault = vi.fn();
+      await closeRequested?.({ preventDefault });
+
+      expect(preventDefault).toHaveBeenCalled();
+      expect(confirm).toHaveBeenCalledWith(expect.stringMatching(/has not been staged/i));
+      expect(destroyMock).not.toHaveBeenCalled();
+    });
+
+    it("offers to stage again for a conflict recreated in the same window", async () => {
+      // `git checkout --merge` brings the conflict back. Resolving it to byte-identical
+      // text is then a resolution that has never been staged, so remembering what was
+      // written across the reload would decline to offer it.
+      let fire: () => void = () => undefined;
+      onRepoChangedMock.mockImplementation((handler: () => void) => {
+        fire = handler;
+        return Promise.resolve(vi.fn());
+      });
+      render(<MergeWindow />);
+      await waitFor(() => expect(screen.getByTestId("panes")).toBeInTheDocument());
+
+      editBuffer(RESOLVED);
+      fireEvent.click(await screen.findByRole("button", { name: /stage this file/i }));
+      await waitFor(() => expect(writeResolvedMock).toHaveBeenCalledTimes(1));
+
+      // The conflict is back, as a different revision of the same path.
+      getConflictStagesMock.mockResolvedValue(stages({ revision: "rev-2" }));
+      fire();
+      await waitFor(() => expect(screen.getByLabelText("result buffer")).toHaveValue(RESULT));
+
+      // Resolved to exactly the text staged a moment ago.
+      editBuffer(RESOLVED);
+      expect(await screen.findByRole("button", { name: /stage this file/i })).toBeInTheDocument();
     });
 
     it("keeps a refusal on screen when an unrelated watcher event arrives", async () => {
@@ -442,6 +533,10 @@ describe("MergeWindow", () => {
       await waitFor(() =>
         expect(screen.getByText(/changed on disk while you were working/i)).toBeInTheDocument(),
       );
+
+      // The notice must not promise a write: the revision it would send is the stale
+      // one, and the backend refuses exactly that.
+      expect(screen.getByText(/staging what you have will be refused/i)).toBeInTheDocument();
 
       fireEvent.click(screen.getByRole("button", { name: /reload it/i }));
       await waitFor(() => expect(screen.getByLabelText("result buffer")).toHaveValue(newer));

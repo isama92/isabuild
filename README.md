@@ -154,9 +154,11 @@ Each part is an independent piece of work, executed in order, and its entry belo
     opposite the top of the block. A block the user has edited past recognition, and a resolved
     one, degrade to top-aligned within the chunk. A diff3 `|||||||` base section is tolerated,
     because a file opened from disk can carry one.
-  - **Recomputed live**, on every document change, coalesced to one animation frame the way
-    `DiffPane` re-measures. The side panes shift as lines appear, which is the cost of never
-    lying about where a chunk is.
+  - **Recomputed live**, on every document change, in a microtask rather than on an animation
+    frame: nothing in the recompute forces a layout, so there is nothing to amortise, and a frame
+    would leave the side panes one behind the text. `DiffPane`'s change map waits for a frame
+    because it measures the DOM; this does not. The side panes shift as lines appear, which is the
+    cost of never lying about where a chunk is.
   - **A mark per non-unchanged chunk**: ours green, theirs blue, conflict orange, agreed grey,
     and a conflict whose markers are gone dimmed, so the strip doubles as progress. Clicking one
     scrolls there, as in the diff window.

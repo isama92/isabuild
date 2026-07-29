@@ -58,6 +58,10 @@ import {
   PANES,
   type AlignChunk,
   type Alignment,
+  // The pane union comes from the alignment module rather than being declared again
+  // here: the two would be the same three names in two places, and `PANES` is
+  // already imported from it.
+  type PaneName,
   type Spacer,
 } from "../lib/mergeAlign";
 import {
@@ -102,11 +106,16 @@ export interface MergePanesProps {
   /** The result buffer's text. */
   value: string;
   onChange: (text: string) => void;
-  /** Disables every action while a write is in flight. */
+  /**
+   * Whether a write is in flight.
+   *
+   * Disables the toolbar's chunk actions only. Typing and the gutter arrows stay
+   * live, deliberately: the buffer is the user's throughout, and `MergeWindow`'s
+   * `commit` is where that decision is paid for.
+   */
   busy: boolean;
 }
 
-type PaneName = "ours" | "result" | "theirs";
 type SideName = "ours" | "theirs";
 
 /**
@@ -606,9 +615,10 @@ export function MergePanes({ path, stages, value, onChange, busy }: MergePanesPr
               setCurrentChunk(at?.index ?? null);
             }
             // Every edit moves a chunk boundary, and every geometry change moves
-            // the marks. Both are asked for on the next frame rather than here:
-            // the recompute dispatches into all three editors, which is not
-            // something to do from inside one of their update cycles.
+            // the marks. Both are asked for rather than done here: the recompute
+            // dispatches into all three editors, which is not something to do from
+            // inside one of their update cycles. See `remeasure` for why that is a
+            // microtask and not a frame.
             if (update.docChanged || update.geometryChanged) remeasure();
           }),
         ],
