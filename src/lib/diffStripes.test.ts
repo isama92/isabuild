@@ -1,13 +1,6 @@
 import { describe, expect, it } from "vitest";
-import {
-  computeStripes,
-  kindOf,
-  markerColors,
-  MIN_HEIGHT,
-  stripeAt,
-  type ChunkLike,
-  type StripeGeometry,
-} from "./diffStripes";
+import { computeStripes, kindOf, markerColors, type ChunkLike } from "./diffStripes";
+import { MIN_HEIGHT, type StripeGeometry } from "./overviewStripes";
 import { DEFAULT_THEME } from "../theme/themes";
 
 /**
@@ -109,36 +102,6 @@ describe("computeStripes", () => {
 
   it("returns nothing for a file with no changes", () => {
     expect(computeStripes([], uniform(10))).toEqual([]);
-  });
-});
-
-describe("stripeAt", () => {
-  const stripes = computeStripes(
-    [chunk(0, 10, 0, 10), chunk(50, 60, 50, 60)],
-    uniform(10),
-  );
-
-  it("finds the chunk under a click", () => {
-    expect(stripeAt(stripes, 0.55)).toBe(1);
-  });
-
-  it("counts a click exactly on an edge as inside", () => {
-    expect(stripeAt(stripes, 0.5)).toBe(1);
-  });
-
-  it("answers null for a click on empty strip", () => {
-    expect(stripeAt(stripes, 0.8)).toBeNull();
-  });
-
-  it("resolves overlapping marks to the higher one", () => {
-    // Dense diffs push marks up against the minimum height until they overlap;
-    // scrolling to the first is predictable, scrolling to whichever came last is
-    // not.
-    const dense = computeStripes(
-      [chunk(0, 10, 0, 10), chunk(10, 20, 10, 20)],
-      uniform(500),
-    );
-    expect(stripeAt(dense, 0.002)).toBe(0);
   });
 });
 

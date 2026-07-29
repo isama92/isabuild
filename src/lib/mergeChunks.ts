@@ -56,6 +56,30 @@ export function isMarker(line: string): boolean {
   return MARKER.test(line);
 }
 
+/** Which of the four marker lines this is, in the order they appear in a block. */
+export type MarkerKind = "start" | "base" | "separator" | "end";
+
+const MARKER_KINDS: ReadonlyArray<readonly [string, MarkerKind]> = [
+  ["<", "start"],
+  ["|", "base"],
+  ["=", "separator"],
+  [">", "end"],
+];
+
+/**
+ * The marker a line is, or null.
+ *
+ * `base` is git's diff3 style, which this app never writes: Rust's
+ * `serialize_result` emits the two-sided form. It is recognised all the same,
+ * because the merge window can be opened on the file *git* wrote, and a user with
+ * `merge.conflictStyle = diff3` has a `|||||||` section in it.
+ */
+export function markerKind(line: string): MarkerKind | null {
+  if (!MARKER.test(line)) return null;
+  const found = MARKER_KINDS.find(([character]) => line.startsWith(character));
+  return found ? found[1] : null;
+}
+
 /**
  * How many conflicts `text` still contains, counted the way git counts them: one
  * per `<<<<<<<` opener.

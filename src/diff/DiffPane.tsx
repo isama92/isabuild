@@ -31,13 +31,13 @@ import { languageForPath } from "../lib/cmLanguage";
 import { currentAppearance, onAppearance } from "../lib/appearance";
 import { useWindowKeybindings } from "../hooks/useWindowKeybindings";
 import { DEFAULT_THEME } from "../theme/themes";
+import { computeStripes, markerColors, DIFF_MARK_LABELS } from "../lib/diffStripes";
 import {
-  computeStripes,
-  markerColors,
+  sameStripes,
   stripeAt,
   type Stripe,
   type StripeGeometry,
-} from "../lib/diffStripes";
+} from "../lib/overviewStripes";
 import {
   editableExtension,
   editableTransaction,
@@ -72,27 +72,6 @@ const DIFF_TIMEOUT_MS = 250;
 
 /** Neither pane may be squeezed below this fraction of the width. */
 const MIN_PANE = 0.15;
-
-/**
- * Whether two change maps would paint the same.
- *
- * Not a nicety: the map is re-measured from an update listener, so without this a
- * new array arrives on every geometry change and re-renders the toolbar with it.
- */
-function sameStripes(a: readonly Stripe[], b: readonly Stripe[]): boolean {
-  return (
-    a.length === b.length &&
-    a.every((stripe, index) => {
-      const other = b[index];
-      return (
-        stripe.chunk === other.chunk &&
-        stripe.kind === other.kind &&
-        stripe.top === other.top &&
-        stripe.height === other.height
-      );
-    })
-  );
-}
 
 export interface DiffPaneProps {
   /** HEAD side. Empty string for a file that is not in HEAD yet. */
@@ -548,6 +527,7 @@ export function DiffPane({
         <OverviewRuler
           stripes={stripes}
           colors={markerColors(theme)}
+          labels={DIFF_MARK_LABELS}
           onSeek={seek}
           chunkAt={chunkAt}
         />

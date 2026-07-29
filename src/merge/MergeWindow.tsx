@@ -5,19 +5,28 @@
 // write, and closing.
 //
 // The write model is the one thing to understand before reading on. The buffer
-// lives **in memory until every conflict is decided**; the instant the marker count
-// reaches zero it is written once and staged, and there is no Save button. That is
-// why none of the diff window's auto-save machinery is here — no debounce, no
-// `shouldAdoptDiskContent` guard against our own echo, no write chain. In exchange
-// two things do need care:
+// lives **in memory until the user says otherwise**: deciding the last conflict
+// offers to stage the file, and nothing reaches disk or the index until that button
+// is pressed. There is still exactly one write, so none of the diff window's
+// auto-save machinery is here — no debounce, no `shouldAdoptDiskContent` guard
+// against our own echo, no write chain.
+//
+// It used to write the instant the marker count hit zero, which was one keystroke
+// away from a staged file nobody had read. Resolving a conflict and *reviewing* the
+// result are two different acts, and the second one is the reason the panes are
+// aligned at all. In exchange three things need care:
 //
 // - **A reload must not take the buffer away.** `repo://changed` fires for anything
 //   in the repository, and the user may be halfway through resolving. A reload with
 //   an untouched buffer is adopted; with a touched one it becomes a notice offering
 //   to reload, and the buffer stays.
-// - **Closing with work outstanding must ask.** An undecided buffer is not on disk
-//   anywhere, so the close is intercepted and confirmed. This is what `merge.json`
-//   needs `core:window:allow-destroy` for.
+// - **Closing with work outstanding must ask**, and "outstanding" now includes a
+//   file that is fully decided but not staged: neither is on disk anywhere, so both
+//   go with the window. This is what `merge.json` needs `core:window:allow-destroy`
+//   for.
+// - **A refused write is a dead end only until something changes.** The button can
+//   simply be pressed again, which is why nothing here has to guard against a write
+//   retrying itself; the effect that needed that guard is gone.
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { MergePanes } from "./MergePanes";
@@ -56,6 +65,17 @@ export function MergeWindow() {
   const [source, setSource] = useState<Source | null>(null);
   /** Set when a watcher event arrived that we declined to adopt. */
   const [staleOnDisk, setStaleOnDisk] = useState(false);
+  /**
+   * Rendered mirrors of `touchedRef` and `writtenRef`.
+   *
+   * The refs stay authoritative: the close handler and the async paths have to read
+   * the newest values synchronously, which is what they are for. What a ref cannot
+   * do is bring a render with it, and whether to offer staging is a question about
+   * exactly those two facts, so it is asked of state instead. Every assignment to
+   * one sets the other, in the same breath.
+   */
+  const [touched, setTouched] = useState(false);
+  const [written, setWritten] = useState<string | null>(null);
 
   // Mirrors for the async paths and the close handler, which must read the
   // newest values without re-subscribing.
@@ -67,11 +87,9 @@ export function MergeWindow() {
   /**
    * Text of the last write the backend *refused*.
    *
-   * Without it a refusal loops: the effect below fires on `busy` returning to
-   * false, every guard still passes, and the same doomed write goes out again —
-   * holding the op lock each time and starving the main window's git operations.
-   * A refusal is only worth retrying once the buffer or the file has changed, and
-   * comparing the text is exactly that test.
+   * Kept so a read that succeeds afterwards does not quietly clear a refusal the
+   * user still has to act on: the file moving under us is news about the write, and
+   * a fresh `getConflictStages` says nothing about it either way.
    */
   const refusedRef = useRef<string | null>(null);
 
@@ -120,6 +138,7 @@ export function MergeWindow() {
     setError(null);
     setStaleOnDisk(false);
     touchedRef.current = false;
+    setTouched(false);
     refusedRef.current = null;
     if (!isMergeable(fetched)) {
       bufferRef.current = null;
@@ -165,17 +184,23 @@ export function MergeWindow() {
       if (target.params) load(target.params);
     },
     // Closing with work outstanding has to ask: the buffer is not on disk anywhere,
-    // so it goes with the window.
+    // so it goes with the window. Since the write is the user's own act now, a file
+    // that is fully decided but unstaged is just as unsaved as an undecided one, and
+    // it gets its own sentence rather than the wrong one.
     onCloseRequest: () => {
-      if (!touchedRef.current || bufferRef.current === null) return true;
-      if (countConflictMarkers(bufferRef.current) === 0) return true;
+      const buffered = bufferRef.current;
+      if (!touchedRef.current || buffered === null) return true;
+      if (buffered === writtenRef.current) return true;
+      const undecided = countConflictMarkers(buffered) > 0;
       // A promise rather than the bare boolean, deliberately: that is what makes
       // the hook intercept the close and `destroy` the window, where a plain
       // `close` would re-enter this same handler. The dialog itself still opens
       // synchronously, during the event.
       return Promise.resolve(
         window.confirm(
-          "This file still has unresolved conflicts, and the changes in this window have not been written anywhere. Close and lose them?",
+          undecided
+            ? "This file still has unresolved conflicts, and the changes in this window have not been written anywhere. Close and lose them?"
+            : "Every conflict is decided, but the file has not been staged, so the result is not written anywhere. Close and lose it?",
         ),
       );
     },
@@ -188,16 +213,17 @@ export function MergeWindow() {
   const handleChange = useCallback((text: string) => {
     bufferRef.current = text;
     touchedRef.current = true;
+    setTouched(true);
     setBuffer(text);
   }, []);
 
   /**
    * Write the resolved buffer and stage it.
    *
-   * Called from the effect below the moment the marker count hits zero, so there
-   * is nothing for the user to press. The revision guard is the backend's, and a
-   * refusal (the file moved under us, a marker we miscounted) surfaces as an error
-   * with the buffer intact.
+   * The user's own act, from the notice that appears once every conflict is
+   * decided. The revision guard is the backend's, and a refusal (the file moved
+   * under us, a marker we miscounted) surfaces as an error with the buffer intact,
+   * ready to be tried again.
    */
   const commit = useCallback(
     async (text: string) => {
@@ -207,13 +233,13 @@ export function MergeWindow() {
       try {
         await writeResolved(params.repoRoot, params.path, text, stagesRef.current?.revision ?? "");
         writtenRef.current = text;
+        setWritten(text);
         refusedRef.current = null;
         touchedRef.current = false;
+        setTouched(false);
         setNotice("Every conflict is resolved, and the file is staged.");
         setError(null);
       } catch (cause) {
-        // Remembered so the effect below does not send the same doomed write again
-        // the moment `busy` clears.
         refusedRef.current = text;
         setError(cause instanceof Error ? cause.message : String(cause));
       } finally {
@@ -223,16 +249,15 @@ export function MergeWindow() {
     [target.params],
   );
 
-  // The single write. Guarded on `writtenRef` so the reload our own write triggers
-  // does not write again, on `refusedRef` so a refusal does not loop, and on `busy`
-  // so a burst of edits cannot overlap.
-  useEffect(() => {
-    if (buffer === null || busy) return;
-    if (outstanding > 0) return;
-    if (buffer === writtenRef.current || buffer === refusedRef.current) return;
-    if (!touchedRef.current) return;
-    void commit(buffer);
-  }, [buffer, busy, commit, outstanding]);
+  /**
+   * Whether there is a finished resolution nobody has staged yet.
+   *
+   * `touchedRef` is what keeps this away from a file that arrived with no conflicts
+   * in it: there is nothing to stage until the user has done something. Comparing
+   * against the text already written is what makes the notice go away afterwards,
+   * including when our own write comes back through the watcher.
+   */
+  const stageable = buffer !== null && outstanding === 0 && touched && buffer !== written;
 
   async function chooseWholeFile(resolution: PathResolution) {
     if (!target.params || busy) return;
@@ -259,6 +284,7 @@ export function MergeWindow() {
     // Counts as touched: neither text is what is staged, so reaching zero
     // conflicts still has to write.
     touchedRef.current = true;
+    setTouched(true);
     setBuffer(text);
     setSource(next);
     setStaleOnDisk(false);
@@ -281,6 +307,30 @@ export function MergeWindow() {
   if (notice !== null) {
     notices.push({ id: "notice", tone: "info", text: notice });
   }
+  if (stageable) {
+    // The offer, rather than the deed. Reviewing what a resolution came to is a
+    // separate act from making it, and this is the pause that allows it.
+    notices.push({
+      id: "stage",
+      tone: "info",
+      text: (
+        <>
+          Every conflict is decided. Read the result over, then{" "}
+          <button
+            type="button"
+            className="ew-button"
+            disabled={busy}
+            title="Write this file and stage it"
+            onClick={() => {
+              if (buffer !== null) void commit(buffer);
+            }}
+          >
+            Stage this file
+          </button>
+        </>
+      ),
+    });
+  }
   if (staleOnDisk) {
     // Declined a reload rather than clobbering the buffer. Saying so and offering
     // the reload is the honest version of "we ignored that".
@@ -295,6 +345,7 @@ export function MergeWindow() {
             className="merge-inline-button"
             onClick={() => {
               touchedRef.current = false;
+              setTouched(false);
               if (target.params) load(target.params);
             }}
           >

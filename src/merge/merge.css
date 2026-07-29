@@ -48,27 +48,50 @@
   min-height: 0;
 }
 
-/* Three equal columns. `minmax(0, 1fr)` rather than `1fr`: a long unwrapped line
-   in one pane would otherwise widen its column and squeeze the other two. */
-.merge-grid {
+/* The panes and the change map beside them. */
+.merge-editor-row {
   flex: 1 1 auto;
+  display: flex;
+  min-height: 0;
+}
+
+/* The one scroller. All three panes live inside it, which is what makes them
+   aligned rather than synchronised: there is a single scroll position, so there is
+   nothing to keep in step. The editors are laid out at their natural height below
+   (`.cm-editor { height: auto }`), the same arrangement `@codemirror/merge` uses
+   for the diff panes. */
+.merge-scroll {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow-y: auto;
+  /* Each pane scrolls itself sideways, through the `overflow-x` that
+     editor/codemirror's theme puts on `.cm-scroller`. A second horizontal
+     scrollbar out here would scroll the whole three-column grid instead, taking
+     the other two panes along for the ride. */
+  overflow-x: hidden;
+}
+
+/* Three equal columns, two rows: headers, then panes. `minmax(0, 1fr)` rather
+   than `1fr`: a long unwrapped line in one pane would otherwise widen its column
+   and squeeze the other two. `align-items: start` keeps each pane at its content
+   height rather than stretching the shortest to the tallest, which would put a
+   band of empty editor under it. */
+.merge-grid {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 1px;
-  min-height: 0;
+  grid-template-rows: auto auto;
+  align-items: start;
+  gap: 0 1px;
   background: var(--ib-bg-button);
 }
 
-.merge-pane {
-  display: flex;
-  flex-direction: column;
-  min-width: 0;
-  min-height: 0;
-  background: var(--ib-bg);
-}
-
 .merge-pane-header {
-  flex: 0 0 auto;
+  /* Sticky rather than outside the scroller: inside it they are grid items, so
+     they cannot drift out of line with the column they name however the window is
+     resized. */
+  position: sticky;
+  top: 0;
+  z-index: 1;
   padding: 3px 10px;
   background: var(--ib-bg-chrome);
   border-bottom: 1px solid var(--ib-border);
@@ -93,9 +116,30 @@
 }
 
 .merge-pane-editor {
-  flex: 1 1 auto;
-  min-height: 0;
-  overflow: hidden;
+  min-width: 0;
+  background: var(--ib-bg);
+}
+
+/* The container scrolls, not the editors.
+   editor/codemirror's theme sets `height: 100%` on the editor root, which is right
+   for a pane that scrolls itself and wrong for one inside a shared scroller: it
+   would give each pane its own viewport and its own scroll position, and the three
+   would drift apart again. Height from the content instead, with the vertical
+   overflow handed outward. `overflow-x` is deliberately left alone, so a long line
+   still scrolls sideways in its own pane. */
+.merge-pane-editor .cm-editor {
+  height: auto;
+}
+
+.merge-pane-editor .cm-scroller {
+  overflow-y: visible;
+}
+
+/* Alignment padding. Deliberately not `--ib-bg`: a stretch with nothing opposite
+   it should read as "nothing here", not as blank file. The same colour
+   @codemirror/merge's own spacers get in the diff window. */
+.isabuild-spacer {
+  background: var(--ib-bg-chrome);
 }
 
 .merge-whole-file {

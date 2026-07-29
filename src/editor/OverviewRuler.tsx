@@ -1,35 +1,39 @@
 // The change map beside the panes: one mark per chunk, at the height of the
-// change, in the three colours Part 4 asked for.
+// change.
 //
-// Presentational. Stripes arrive as fractions from `lib/diffStripes`, already
-// classified and already positioned, and a click comes back out as a chunk index.
-// The component never touches an editor, which is what lets it be tested in jsdom
-// at all — the measuring is the caller's problem, and it is the caller who has the
-// live view to measure.
+// Presentational. Stripes arrive as fractions from `lib/diffStripes` or
+// `lib/mergeStripes`, already classified and already positioned, and a click
+// comes back out as a chunk index. The component never touches an editor, which
+// is what lets it be tested in jsdom at all — the measuring is the caller's
+// problem, and it is the caller who has the live view to measure.
 //
-// Lives in `editor/` rather than `diff/` because nothing here is diff-specific:
-// the merge window can hang it beside its panes as soon as they are aligned
-// enough for a shared vertical scale to mean anything.
+// Both windows use it, which is what decides the shape of the props: the *kinds*
+// are the caller's, because a diff mark says which way a line moved and a merge
+// mark says whose a chunk is, so the colour and the label for each come in
+// alongside rather than being known here.
 
 import type { MouseEvent } from "react";
-import type { Stripe, StripeKind } from "../lib/diffStripes";
+import type { Stripe } from "../lib/overviewStripes";
 
 export interface OverviewRulerProps {
   stripes: readonly Stripe[];
-  colors: Record<StripeKind, string>;
+  /** Colour per kind. A kind with no entry paints as nothing rather than throwing. */
+  colors: Record<string, string>;
+  /** What each kind is called, for the hover. */
+  labels: Record<string, string>;
   /** A click on a mark, or on the strip between marks. */
   onSeek: (chunk: number) => void;
   /** Which chunk a click at `fraction` of the strip's height belongs to. */
   chunkAt: (fraction: number) => number | null;
 }
 
-const LABEL: Record<StripeKind, string> = {
-  added: "added",
-  modified: "changed",
-  removed: "removed",
-};
-
-export function OverviewRuler({ stripes, colors, onSeek, chunkAt }: OverviewRulerProps) {
+export function OverviewRuler({
+  stripes,
+  colors,
+  labels,
+  onSeek,
+  chunkAt,
+}: OverviewRulerProps) {
   function onClick(event: MouseEvent<HTMLDivElement>) {
     const box = event.currentTarget.getBoundingClientRect();
     if (box.height === 0) return;
@@ -55,7 +59,7 @@ export function OverviewRuler({ stripes, colors, onSeek, chunkAt }: OverviewRule
           className="ew-ruler-mark"
           key={stripe.chunk}
           data-kind={stripe.kind}
-          title={`${LABEL[stripe.kind]} — click to scroll here`}
+          title={`${labels[stripe.kind] ?? stripe.kind}, click to scroll here`}
           style={{
             top: `${stripe.top * 100}%`,
             height: `${stripe.height * 100}%`,

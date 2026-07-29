@@ -122,62 +122,68 @@ through the PAT, the workflow's own `permissions:` block is not what authorises 
 
 Each part is an independent piece of work, executed in order, and its entry below *is* its plan — rationale, scope and acceptance criteria. A part is done only when those pass on macOS, Linux and Windows, and it is then **removed** from this list rather than ticked, with the rest renumbered. A number is therefore a position in the queue and not a stable id: what shipped and why is in `CHANGELOG.md` and the git history, and code comments name the number a part had at the time.
 
-- [ ] **Part 1 — Watch only what matters**
-  Built and verified on Linux; **outstanding: confirmation on macOS and Windows.**
-
-  **What shipped.** The watch is assembled a directory at a time on Linux (`src-tauri/src/watchtree.rs`),
-  walking the tree, asking `watchfilter` which directories survive, and arming only those: 4,419
-  inotify watches became 32 in this checkout, and arming got 41x faster with them (813 ms to 20 ms),
-  because a recursive watch spends one watch per directory and 99% of them were on paths whose
-  events were thrown away. `.git/objects` and `.git/logs`
-  alone are 255 of the 264 directories under `.git`, and the filter already knew every event they
-  produce is worthless. A directory appearing or disappearing is reconciled from the event batch,
-  a subtree is re-read *after* it is armed so nothing created in the gap is lost, and a
-  `.gitignore` edit re-plans the set in both directions. The arming replay is folded in: the walk
-  records what the replay used to teach, at one `check-ignore` per level of the tree. Arming can
-  now fail partially, so `git_watch` returns the coverage and the frontend warns on a refused
-  count.
-
-  **Still outstanding on the reporting.** That warning is a `console.warn`, which a user without
-  devtools open will never see, so a partially armed watch is quieter than before rather than
-  actually visible. Making it a UI signal is deliberately not in this part; the known-limitation
-  entry above says so plainly rather than claiming the failure is now surfaced.
-
-  **Deliberately Linux-only.** `notify`'s macOS backend stops, joins and rebuilds its entire
-  FSEvents stream on *every* `watch()` call, so arming per directory would cost one rebuild each;
-  Windows holds an open handle and a 16 KB buffer per watch. Both use one recursive stream per
-  root today, which is already cheap. `arm` and `reconcile` in `watcher.rs` are the two seams;
-  everything else, including the owner thread, is shared and exercised on all three platforms.
-
-  **What is outstanding.** `cross-os.yml` runs the Rust suite on `windows-2022` and `macos-14`,
-  which covers the shared lifecycle and the walk's own tests — but it triggers on **push to
-  `main`**, not on pull requests, so that signal only arrives *after* this merges and a failure
-  lands on `main`. The PR gate is Linux-only. Then still to confirm by hand on macOS and Windows:
-  opening a project, staging from the embedded terminal, a branch switch, and a build churning an
-  ignored directory, all still refreshing the panel exactly as before.
-
-- [ ] **Part 2 — Align the merge panes**
-  Give ours | result | theirs the vertical alignment the diff panes have, and retire the
-  proportional scroll sync.
+- [ ] **Part 1 — Align the merge panes**
+  Give ours | result | theirs the vertical alignment the diff panes have, retire the proportional
+  scroll sync, hang a change map beside them, and stop writing the resolved file the instant the
+  last marker goes.
 
   **Why this exists.** The three panes are synchronised in proportion (`lib/paneScroll.ts`), not
   aligned, so they drift apart in a long file and next/previous conflict is the only reliable way
-  to move between chunks. The diff panes do not have that problem, and the obvious thought — reuse
-  whatever they use — does not work: `@codemirror/merge` aligns with spacer blocks, but the aligner
+  to move between chunks. The diff panes do not have that problem, and the obvious thought, reuse
+  whatever they use, does not work: `@codemirror/merge` aligns with spacer blocks, but the aligner
   lives inside the `MergeView` class rather than being an exported extension, and a `MergeView` is
   strictly two documents, so a three-pane editor cannot be one.
 
   **What it needs.** Our own spacer widgets, from a chunk model we already have: Rust hands over
   each chunk's span in all four coordinate systems (base, ours, theirs, result), so the padding
-  each pane needs at each chunk boundary is arithmetic over three line-range lists — pure, and
-  unit-testable the way `mergeChunks.ts` already is. The insertion itself is a block widget per
-  pane, which `MergePanes` is already the right shape for. When it lands, `lib/paneScroll.ts` and
-  its twelve tests go, along with the `syncing` flag and the per-scroller listeners.
+  each pane needs at each chunk boundary is arithmetic over three line counts, pure and
+  unit-testable the way `mergeChunks.ts` already is. Line counts rather than measured pixels is
+  sound here only because wrapping is off in these panes and all three share one theme, so a line
+  is a line is a line; `@codemirror/merge` measures `lineBlockAt().top` instead because it cannot
+  assume either. The insertion itself is a block widget per pane, which `MergePanes` is already
+  the right shape for.
 
-  **Also worth folding in**, because it becomes meaningful only once the panes align: the change
-  map. `editor/OverviewRuler` is already window-agnostic and takes measured geometry, so the merge
-  window can hang one beside its panes — but a shared vertical scale says nothing until the three
-  panes agree on one.
+  Decisions taken before building, all of them UX-shaping:
+
+  - **One shared scroller**, the way a `MergeView` scrolls its container rather than its editors.
+    Aligned panes in one scroll box make sync a non-concept: `lib/paneScroll.ts` and its tests go,
+    with the `syncing` flag and the three per-scroller listeners. The pane headers become sticky
+    rows of the same grid so they stay put and stay over their own column.
+  - **Marker-aware alignment.** Inside a conflict, our lines sit opposite their copy in the
+    `<<<<<<<` section and theirs opposite the `=======` section, rather than the whole side sitting
+    opposite the top of the block. A block the user has edited past recognition, and a resolved
+    one, degrade to top-aligned within the chunk. A diff3 `|||||||` base section is tolerated,
+    because a file opened from disk can carry one.
+  - **Recomputed live**, on every document change, coalesced to one animation frame the way
+    `DiffPane` re-measures. The side panes shift as lines appear, which is the cost of never
+    lying about where a chunk is.
+  - **A mark per non-unchanged chunk**: ours green, theirs blue, conflict orange, agreed grey,
+    and a conflict whose markers are gone dimmed, so the strip doubles as progress. Clicking one
+    scrolls there, as in the diff window.
+  - **Previous/Next stay conflict-only.** The keybinding ids, their labels and the marker scan
+    behind them do not change; the map is how the chunks git decided for you are reached.
+  - **Zero markers no longer writes by itself.** The window offers "Stage this file" and leaves
+    the buffer alone until it is pressed, so a finished resolution can be read over first. That
+    retires the auto-write effect, and with it the refused-write retry loop it needed guarding
+    against; closing with a resolved but unstaged buffer has to confirm, as an undecided one
+    already does.
+
+  **Acceptance criteria.** A conflict's three panes start every chunk on the same screen row and
+  stay that way through a resolution, a reload the window adopts, a theme or font change and a
+  window resize. One scrollbar moves all three. The map marks every changed chunk, dims a
+  resolved conflict and seeks on click. Nothing is written or staged until the button is pressed,
+  and closing before that asks. `paneScroll` is gone from the tree.
+
+  **Verified so far**, in Chromium against a real nine-chunk model taken from a conflicted
+  fixture: paired lines share a row to the pixel inside a marker block and at every chunk
+  boundary, all three panes measure the same content height, a resolution realigns and re-dims
+  its mark, the headers stay pinned to the top of the scroll box, per-pane horizontal scrolling of
+  long lines survives the shared scroller, and an 8,000-line file still renders ~60 lines per
+  pane, so the viewport is still virtualised. **Outstanding**: the same pass in the app's own
+  webviews, which are not Chromium — WebKitGTK on Linux, WebView2 on Windows, WKWebView on macOS —
+  and specifically that sticky grid headers and the estimated-height spacer blocks behave there;
+  plus a font-size change and a window resize by hand, and the staging button end to end against a
+  real index.
 
 - [ ] auto update
 - [ ] help menu with `check for update` and `about` pages
