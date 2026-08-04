@@ -389,6 +389,43 @@ const RESERVED: readonly { accelerator: string; by: string; scopes: readonly Sco
   { accelerator: "Meta+W", by: "closing the window", scopes: ["diff", "merge"] },
   { accelerator: "Ctrl+S", by: "saving in the diff window", scopes: ["diff"] },
   { accelerator: "Meta+S", by: "saving in the diff window", scopes: ["diff"] },
+  // The word and line editing keys the terminals translate for the shell and for
+  // Claude Code (`lib/terminalKeys`). A binding here would be *worse* than the
+  // dead rows above: `useGlobalKeybindings` stops propagation in the capture
+  // phase, so the key would never reach xterm and word motion would break
+  // silently, with nothing connecting the symptom to the cause.
+  //
+  // Workspace only, and that matters — the diff and merge windows are
+  // CodeMirror, where Ctrl+ArrowLeft is word motion inside the editor and
+  // nothing in `terminalKeys` runs, so reserving it there would refuse a
+  // binding for no reason. Shift+Enter needs no entry: `isBindable` already
+  // refuses it, Shift not counting as a modifier.
+  { accelerator: "Ctrl+ArrowLeft", by: "word editing in the terminals", scopes: ["workspace"] },
+  { accelerator: "Ctrl+ArrowRight", by: "word editing in the terminals", scopes: ["workspace"] },
+  { accelerator: "Ctrl+Backspace", by: "word editing in the terminals", scopes: ["workspace"] },
+  { accelerator: "Ctrl+Delete", by: "word editing in the terminals", scopes: ["workspace"] },
+  { accelerator: "Alt+ArrowLeft", by: "word editing in the terminals", scopes: ["workspace"] },
+  { accelerator: "Alt+ArrowRight", by: "word editing in the terminals", scopes: ["workspace"] },
+  { accelerator: "Alt+Backspace", by: "word editing in the terminals", scopes: ["workspace"] },
+  { accelerator: "Alt+Delete", by: "word editing in the terminals", scopes: ["workspace"] },
+  // Listed on every platform though they only fire on a Mac, for the same reason
+  // the menu accelerators above list both spellings: a config travels.
+  { accelerator: "Meta+ArrowLeft", by: "line editing in the terminals", scopes: ["workspace"] },
+  { accelerator: "Meta+ArrowRight", by: "line editing in the terminals", scopes: ["workspace"] },
+  { accelerator: "Meta+Backspace", by: "line editing in the terminals", scopes: ["workspace"] },
+  // The numpad spellings of the same two arrows, which the terminals translate
+  // as well: with NumLock off, Numpad4 and Numpad6 report `key: ArrowLeft` and
+  // `ArrowRight`, which is what `terminalKeys` reads, while this registry reads
+  // the `Numpad4` code. Without these rows a binding on the numpad slips past
+  // and breaks word motion there in exactly the silent way the rows above exist
+  // to prevent. NumpadDecimal, the Delete position, needs no row: `nameForCode`
+  // has no name for it, so it cannot be recorded at all.
+  { accelerator: "Ctrl+Numpad4", by: "word editing in the terminals", scopes: ["workspace"] },
+  { accelerator: "Ctrl+Numpad6", by: "word editing in the terminals", scopes: ["workspace"] },
+  { accelerator: "Alt+Numpad4", by: "word editing in the terminals", scopes: ["workspace"] },
+  { accelerator: "Alt+Numpad6", by: "word editing in the terminals", scopes: ["workspace"] },
+  { accelerator: "Meta+Numpad4", by: "line editing in the terminals", scopes: ["workspace"] },
+  { accelerator: "Meta+Numpad6", by: "line editing in the terminals", scopes: ["workspace"] },
 ];
 
 /**

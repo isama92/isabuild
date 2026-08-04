@@ -86,6 +86,21 @@ describe("the default bindings", () => {
     expect(preventDefault).not.toHaveBeenCalled();
     expect(useLayoutStore.getState().pendingGitAction).toBeNull();
   });
+
+  it("binds none of the keys the terminals translate for word editing", () => {
+    // Same hazard one layer along: these reach xterm only because nothing here
+    // resolves them, and `lib/terminalKeys` turns them into word motion and word
+    // deletion at both prompts.
+    render(<Harness />);
+    for (const modifiers of [{ ctrlKey: true }, { altKey: true }, { metaKey: true }]) {
+      for (const code of ["ArrowLeft", "ArrowRight", "Backspace", "Delete"]) {
+        const { preventDefault, stopPropagation } = press({ ...modifiers, code });
+        expect(preventDefault, code).not.toHaveBeenCalled();
+        expect(stopPropagation, code).not.toHaveBeenCalled();
+      }
+    }
+    expect(useLayoutStore.getState().pendingGitAction).toBeNull();
+  });
 });
 
 describe("while a dialog is open", () => {

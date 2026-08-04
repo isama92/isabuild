@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { invoke } from "@tauri-apps/api/core";
-import { attach, restart, SHIFT_ENTER } from "./ptySession";
+import { attach, restart } from "./ptySession";
+import { BACKWARD_WORD, SHIFT_ENTER } from "./terminalKeys";
 import { publishAppearance, resetAppearance } from "./appearance";
 import { DEFAULT_THEME, themeById } from "../theme/themes";
 import { bytesToBase64, stringToBase64 } from "./base64";
@@ -198,6 +199,9 @@ describe("attach", () => {
     expect(writes[0][1]).toMatchObject({ id, data: stringToBase64("ls\r") });
   });
 
+  // These cover the wiring — that the handler is table-driven, writes through
+  // pty_write and stops xterm sending its own encoding. Which bytes each
+  // combination maps to is `terminalKeys.test.ts`.
   it("sends meta+Return for Shift+Enter, not the bare CR xterm would encode", async () => {
     mockBackend();
     const id = nextId();
@@ -215,6 +219,36 @@ describe("attach", () => {
     const writes = callsTo("pty_write");
     expect(writes).toHaveLength(1);
     expect(writes[0][1]).toMatchObject({ id, data: stringToBase64(SHIFT_ENTER) });
+  });
+
+  it("sends a word-motion sequence for Ctrl+ArrowLeft", async () => {
+    mockBackend();
+    const id = nextId();
+    attach(container, { id });
+    await flush();
+
+    const event = keyDown("ArrowLeft", { ctrlKey: true });
+    const handled = hoisted.terminals.at(-1)!.keyHandler!(event);
+    await flush();
+
+    expect(handled).toBe(false);
+    expect(event.preventDefault).toHaveBeenCalled();
+    const writes = callsTo("pty_write");
+    expect(writes).toHaveLength(1);
+    expect(writes[0][1]).toMatchObject({ id, data: stringToBase64(BACKWARD_WORD) });
+  });
+
+  it("leaves a plain ArrowLeft to xterm, so the cursor still moves one character", async () => {
+    mockBackend();
+    attach(container, { id: nextId() });
+    await flush();
+
+    const event = keyDown("ArrowLeft");
+    expect(hoisted.terminals.at(-1)!.keyHandler!(event)).toBe(true);
+    await flush();
+
+    expect(event.preventDefault).not.toHaveBeenCalled();
+    expect(callsTo("pty_write")).toHaveLength(0);
   });
 
   it("leaves plain Enter to xterm, so it still submits", async () => {

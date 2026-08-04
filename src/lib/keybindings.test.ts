@@ -309,11 +309,31 @@ describe("reservedBy", () => {
     expect(reservedBy("next-conflict", accelerator("Ctrl+W"))).not.toBeNull();
   });
 
+  it("names the terminals' editing keys in the workspace", () => {
+    expect(reservedBy("toggle-terminal", accelerator("Ctrl+ArrowLeft"))).toContain("word editing");
+    expect(reservedBy("toggle-terminal", accelerator("Ctrl+Backspace"))).toContain("word editing");
+    expect(reservedBy("toggle-terminal", accelerator("Alt+ArrowRight"))).toContain("word editing");
+    expect(reservedBy("toggle-terminal", accelerator("Cmd+ArrowLeft"))).toContain("line editing");
+  });
+
+  it("reserves the numpad arrows too, which the terminals also translate", () => {
+    // The one spelling the two tables disagree on: with NumLock off the numpad
+    // arrows report `key: ArrowLeft`, which `terminalKeys` translates, under a
+    // `Numpad4` code, which is what this registry would record.
+    expect(reservedBy("toggle-terminal", accelerator("Ctrl+Numpad4"))).toContain("word editing");
+    expect(reservedBy("toggle-terminal", accelerator("Alt+Numpad6"))).toContain("word editing");
+    expect(reservedBy("toggle-terminal", accelerator("Cmd+Numpad4"))).toContain("line editing");
+  });
+
   it("does not reserve a combination in a scope that never sees it", () => {
     // Ctrl+O is a File-menu accelerator, which only the workspace has.
     expect(reservedBy("close-window", accelerator("Ctrl+O"))).toBeNull();
     // Ctrl+S is hardcoded in the diff window only.
     expect(reservedBy("next-conflict", accelerator("Ctrl+S"))).toBeNull();
+    // The editor windows have no terminal, and Ctrl+ArrowLeft is word motion
+    // inside CodeMirror there, so refusing it would cost a binding for nothing.
+    expect(reservedBy("next-change", accelerator("Ctrl+ArrowLeft"))).toBeNull();
+    expect(reservedBy("next-conflict", accelerator("Ctrl+Backspace"))).toBeNull();
   });
 
   it("reports nothing for a free combination", () => {
