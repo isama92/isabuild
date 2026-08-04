@@ -150,7 +150,17 @@ Each part is an independent piece of work, executed in order, and its entry belo
       (verified — it emits `ESC [?1049h` 13 bytes into its output and never leaves), so the
       obvious global form of the check would disable the whole feature exactly where it is
       aimed. `MainPanel` passes `respectAlternateScreen={false}`, safe only because it is the one
-      session whose program is known; the shell terminal keeps the default. All eleven
+      session whose program is known; the shell terminal keeps the default.
+      The guard is all-or-nothing across the table, and that has one accepted cost: a `claude`
+      launched by hand in the bottom terminal loses Shift+Enter, because it sits in the alternate
+      buffer too, so the prompt submits instead of extending. It worked there before this part,
+      and the path is not hypothetical — "Retry in terminal" writes into that region
+      (`TerminalPanel`, session `shell-main`). Deliberately not coded around: exempting
+      Shift+Enter would re-break the vim case the guard exists for, since in insert mode a bare
+      CR inserts a newline while `\x1b\r` leaves insert mode, and nothing a terminal exposes
+      separates a TUI that parses CSI from a TUI that is itself a line editor. If it ever needs
+      solving, the answer is a per-session opt-out on that region and not a special case in the
+      table. All eleven
       combinations, plus the numpad spellings of the arrows, go into `RESERVED` in
       `src/lib/keybindings.ts` for the workspace scope, so the settings window refuses to bind
       an app action over one and break editing silently.
@@ -170,7 +180,10 @@ Each part is an independent piece of work, executed in order, and its entry belo
       navigating the webview back; macOS for the whole Ctrl tier being unreachable (Mission
       Control) and the Cmd tier working; and everywhere whether Claude Code's own input
       implements `M-d` (forward kill-word), the one row with real uncertainty — it is correct at
-      a shell prompt either way.
+      a shell prompt either way. The pass should also walk the accepted cost above, so it is
+      recognised on sight rather than filed as a regression: run `claude` in the bottom terminal
+      and confirm Shift+Enter submits there while the main pane still extends the prompt, and
+      that Ctrl+Backspace is likewise inert in that hand-launched session.
 - [ ] auto update
 - [ ] help menu with `check for update` and `about` pages
 - [ ] view menu with theme selector and zoom
