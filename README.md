@@ -141,7 +141,17 @@ Each part is an independent piece of work, executed in order, and its entry belo
       is Super on Linux and Windows, where `\x15` would silently discard a typed line if a
       window manager ever let it through. Modifiers match exactly, so Ctrl+Shift+Arrow stays
       with xterm (a terminal has no input selection to extend), and a keystroke inside an IME
-      composition is left alone. All eleven combinations go into `RESERVED` in
+      composition is left alone. Cmd+Delete stays mis-encoded on purpose (xterm sends
+      `CSI 3;9~`): macOS has no Cmd+Delete text gesture to honour, so a row for it would mean
+      inventing the gesture. The translation also **stands down while the alternate screen
+      buffer is active**, because `vim`, `less` and `htop` parse `CSI 1;5D` and read `\x1bb` as
+      Escape-then-`b`, which in vim's insert mode leaves insert mode. That guard is per session
+      rather than global: Claude Code occupies the alternate buffer from startup to exit
+      (verified — it emits `ESC [?1049h` 13 bytes into its output and never leaves), so the
+      obvious global form of the check would disable the whole feature exactly where it is
+      aimed. `MainPanel` passes `respectAlternateScreen={false}`, safe only because it is the one
+      session whose program is known; the shell terminal keeps the default. All eleven
+      combinations, plus the numpad spellings of the arrows, go into `RESERVED` in
       `src/lib/keybindings.ts` for the workspace scope, so the settings window refuses to bind
       an app action over one and break editing silently.
       Acceptance: at both prompts, Ctrl+Arrow (Linux, Windows) and Option+Arrow (macOS) move by
@@ -149,7 +159,9 @@ Each part is an independent piece of work, executed in order, and its entry belo
       side of the cursor; Cmd+Arrow and Cmd+Backspace do line motion on macOS and nothing
       changes elsewhere; plain arrows, plain Backspace and Alt+digit are unchanged; Shift+Enter
       still inserts a newline in Claude Code; Alt+ArrowLeft does not navigate the webview back;
-      the settings window refuses Ctrl+ArrowLeft with a reason.
+      the settings window refuses Ctrl+ArrowLeft with a reason; and in the shell terminal
+      `vim` in insert mode still moves a word on Ctrl+ArrowLeft rather than leaving insert mode,
+      which is the alternate-screen guard doing its job.
       Outstanding: **the interactive pass in the running app is not done on any platform.** What
       is verified is the automated half — both suites green — plus every byte in the table
       checked against `bind -p` and `bindkey` on Linux, which is what makes the sequences right

@@ -20,6 +20,9 @@ const hoisted = vi.hoisted(() => {
     loadAddon = vi.fn();
     dataHandler: ((data: string) => void) | null = null;
     keyHandler: ((event: KeyboardEvent) => boolean) | null = null;
+    // Live in real xterm too: the key handler reads the buffer type to tell a
+    // full-screen program from a prompt. Tests flip it to "alternate".
+    buffer = { active: { type: "normal" as "normal" | "alternate" } };
     disposeSpy = vi.fn();
 
     constructor(options: Record<string, unknown> = {}) {
@@ -249,6 +252,42 @@ describe("attach", () => {
 
     expect(event.preventDefault).not.toHaveBeenCalled();
     expect(callsTo("pty_write")).toHaveLength(0);
+  });
+
+  it("stands down while a full-screen program owns the terminal", async () => {
+    mockBackend();
+    // No opt-out: the default a plain shell gets, where the alternate buffer
+    // means vim or less, which parse xterm's own encodings and not these.
+    attach(container, { id: nextId() });
+    await flush();
+
+    const term = hoisted.terminals.at(-1)!;
+    term.buffer.active.type = "alternate";
+    const event = keyDown("ArrowLeft", { ctrlKey: true });
+    expect(term.keyHandler!(event)).toBe(true);
+    await flush();
+
+    expect(event.preventDefault).not.toHaveBeenCalled();
+    expect(callsTo("pty_write")).toHaveLength(0);
+  });
+
+  it("keeps translating in the alternate buffer for a session that opts out", async () => {
+    mockBackend();
+    // Claude Code's session: it lives in the alternate buffer for its whole run,
+    // so the guard would otherwise disable editing exactly where it is wanted.
+    const id = nextId();
+    attach(container, { id, cmd: "claude", respectAlternateScreen: false });
+    await flush();
+
+    const term = hoisted.terminals.at(-1)!;
+    term.buffer.active.type = "alternate";
+    const event = keyDown("ArrowLeft", { ctrlKey: true });
+    expect(term.keyHandler!(event)).toBe(false);
+    await flush();
+
+    const writes = callsTo("pty_write");
+    expect(writes).toHaveLength(1);
+    expect(writes[0][1]).toMatchObject({ id, data: stringToBase64(BACKWARD_WORD) });
   });
 
   it("leaves plain Enter to xterm, so it still submits", async () => {

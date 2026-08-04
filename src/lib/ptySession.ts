@@ -63,6 +63,21 @@ export interface AttachOptions {
   cmd?: string;
   /** Focus the terminal once it is attached and wired. */
   autoFocus?: boolean;
+  /**
+   * Leave the editing keys `lib/terminalKeys` translates to xterm while the
+   * alternate screen buffer is active, i.e. while a full-screen program owns the
+   * terminal. Defaults to true, which is what an arbitrary shell needs: `vim`,
+   * `less` and `htop` parse `CSI 1;5D` as Ctrl+ArrowLeft and read `\x1bb` as an
+   * Escape followed by a `b`, which in vim's insert mode means leaving insert
+   * mode rather than moving a word.
+   *
+   * The Claude Code session passes false, because Claude Code occupies the
+   * alternate buffer for its whole run — it emits `ESC [?1049h` at startup and
+   * never leaves — so respecting the buffer there would disable the translation
+   * exactly where it is aimed. That is only safe because we know what runs in
+   * that session; a session running something arbitrary must keep the default.
+   */
+  respectAlternateScreen?: boolean;
   onExit?: (info: PtyExitInfo) => void;
   /** Called when spawning or wiring the session fails. */
   onError?: (error: unknown) => void;
@@ -239,14 +254,19 @@ async function initialize(
   // useGlobalKeybindings listens in the capture phase precisely so a bound key
   // never reaches xterm. The settings window refuses them (`RESERVED` in
   // `lib/keybindings`), so only a hand-edited file can.
+  const respectAlternateScreen = opts.respectAlternateScreen ?? true;
   e.term.attachCustomKeyEventHandler((event) => {
+    // A full-screen program owns the terminal, and it parses xterm's own
+    // encodings rather than the line-editor ones. See `respectAlternateScreen`.
+    if (respectAlternateScreen && e.term.buffer.active.type === "alternate") return true;
     const sequence = sequenceFor(event);
     if (sequence === null) return true;
     // preventDefault as well as returning false: xterm returns early on a false
     // handler, before its own preventDefault, which would leave the browser
     // applying the key to the hidden textarea xterm manages — a newline for
-    // Shift+Enter, a word cut out of it for Ctrl+Backspace — and, on Windows and
-    // Linux, letting Alt+ArrowLeft navigate the webview back out of the app.
+    // Shift+Enter, a word cut out of it for Ctrl+Backspace — and letting the
+    // webview navigate back out of the app: Alt+ArrowLeft does that on Windows
+    // and Linux, Cmd+ArrowLeft in WKWebView on macOS.
     event.preventDefault();
     void invoke("pty_write", { id: opts.id, data: stringToBase64(sequence) });
     return false;

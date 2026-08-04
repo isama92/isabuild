@@ -110,6 +110,13 @@ export const TRANSLATIONS: Readonly<Record<string, string>> = {
  * sends nothing today. Cmd+Backspace is the one that currently misbehaves rather
  * than doing nothing — the backspace case never checks `metaKey`, so it deletes
  * a single character.
+ *
+ * Cmd+Delete is deliberately absent, and is the one combination xterm still
+ * encodes as something no line editor reads: the delete case folds `metaKey`
+ * into its modifier bits with no bail-out, so it sends `CSI 3;9~`. macOS has no
+ * Cmd+Delete text gesture to honour — deleting forwards to the end of a line is
+ * Ctrl+K there, which already works — so inventing a row for it would mean
+ * inventing the gesture too. Left as it is rather than mapped.
  */
 export const MAC_TRANSLATIONS: Readonly<Record<string, string>> = {
   "Meta+ArrowLeft": LINE_START,
@@ -170,7 +177,11 @@ export function sequenceFor(event: TerminalKeyEvent, mac: boolean = IS_MAC): str
   if (event.isComposing === true) return null;
 
   const combo = comboOf(event);
-  if (TRANSLATIONS[combo] !== undefined) return TRANSLATIONS[combo];
-  if (mac && MAC_TRANSLATIONS[combo] !== undefined) return MAC_TRANSLATIONS[combo];
+  // `hasOwn` rather than a truthiness or `!== undefined` check: `combo` comes
+  // from `event.key`, so a lookup that walked the prototype chain would answer
+  // for a key named like an `Object.prototype` member. No real key is, but the
+  // guard costs nothing and removes the question.
+  if (Object.hasOwn(TRANSLATIONS, combo)) return TRANSLATIONS[combo];
+  if (mac && Object.hasOwn(MAC_TRANSLATIONS, combo)) return MAC_TRANSLATIONS[combo];
   return null;
 }

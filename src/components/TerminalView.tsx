@@ -16,6 +16,13 @@ interface TerminalViewProps {
   /** Focus the terminal once it is attached. */
   autoFocus?: boolean;
   /**
+   * Passed through to `attach`: whether the word and line editing keys stand
+   * down while a full-screen program owns the terminal. Defaults to true, which
+   * is right for anything but a session whose program we know. See
+   * `AttachOptions.respectAlternateScreen`.
+   */
+  respectAlternateScreen?: boolean;
+  /**
    * Called when the child process exits. When provided, the parent handles
    * the exit (e.g. closing the region) and no exit overlay is shown; when
    * omitted, the built-in exit/restart overlay is shown instead.
@@ -41,6 +48,7 @@ export function TerminalView({
   label = "Claude Code",
   installHintUrl,
   autoFocus,
+  respectAlternateScreen,
   onExit,
   onReady,
 }: TerminalViewProps) {
@@ -70,6 +78,7 @@ export function TerminalView({
       id: sessionId,
       cmd,
       autoFocus,
+      respectAlternateScreen,
       onExit: (info: PtyExitInfo) => {
         const handler = onExitRef.current;
         if (handler) handler(info);
@@ -80,7 +89,7 @@ export function TerminalView({
       onReady: () => onReadyRef.current?.(),
     });
     return () => handle.detach();
-  }, [sessionId, cmd, autoFocus]);
+  }, [sessionId, cmd, autoFocus, respectAlternateScreen]);
 
   async function handleRestart() {
     setOverlay(null);

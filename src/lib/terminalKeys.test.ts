@@ -145,7 +145,28 @@ describe("isMacUserAgent", () => {
 describe("the two key tables together", () => {
   const combos = [...Object.keys(TRANSLATIONS), ...Object.keys(MAC_TRANSLATIONS)];
 
-  it.each(combos)("%s is spelled the way an accelerator is", (combo) => {
+  /**
+   * The codes the registry sees for rows this table reaches under a second
+   * spelling: with NumLock off the numpad arrows report `key: ArrowLeft` while
+   * their code stays `Numpad4`. Derived here rather than listed, so a new arrow
+   * row cannot pick up a `RESERVED` gap on the numpad side unnoticed.
+   */
+  const NUMPAD_CODES: Record<string, string> = { ArrowLeft: "Numpad4", ArrowRight: "Numpad6" };
+  const numpadCombos = combos.flatMap((combo) => {
+    const parts = combo.split("+");
+    const code = NUMPAD_CODES[parts[parts.length - 1]];
+    return code === undefined ? [] : [[...parts.slice(0, -1), code].join("+")];
+  });
+
+  it("derives a numpad spelling for the arrow rows", () => {
+    // Guards the derivation itself: an empty list would make the reservation
+    // check below silently stop covering the numpad.
+    expect(numpadCombos).toContain("Ctrl+Numpad4");
+    expect(numpadCombos).toContain("Alt+Numpad6");
+    expect(numpadCombos).toContain("Meta+Numpad4");
+  });
+
+  it.each([...combos, ...numpadCombos])("%s is spelled the way an accelerator is", (combo) => {
     // What lets a row be compared with `RESERVED` as a string at all.
     const accelerator = parseAccelerator(combo);
     expect(accelerator, combo).not.toBeNull();
@@ -153,7 +174,7 @@ describe("the two key tables together", () => {
     expect(formatAccelerator(accelerator)).toBe(combo);
   });
 
-  it.each(combos)("%s cannot be bound to an app action in the workspace", (combo) => {
+  it.each([...combos, ...numpadCombos])("%s cannot be bound in the workspace", (combo) => {
     // Otherwise the capture-phase listener swallows the key before xterm sees it
     // and editing dies silently. A disjunction because the two layers refuse a
     // combination for different reasons, so what it catches is a row with a real
