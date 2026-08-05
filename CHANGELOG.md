@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.6.0](https://github.com/isama92/isabuild/compare/v0.5.0...v0.6.0) (2026-08-05)
+
+
+### Features
+
+* part 1 — word and line editing in both terminals ([#23](https://github.com/isama92/isabuild/issues/23)) ([3f3c4d6](https://github.com/isama92/isabuild/commit/3f3c4d6b2b667d85f806a8d385056ad2b1806167))
+
 ## [0.5.0](https://github.com/isama92/isabuild/compare/v0.4.0...v0.5.0) (2026-07-29)
 
 
