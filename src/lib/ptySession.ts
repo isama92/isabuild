@@ -15,6 +15,7 @@ import { Terminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import { WebglAddon } from "@xterm/addon-webgl";
 import { base64ToBytes, stringToBase64 } from "./base64";
+import { sequenceFor } from "./terminalKeys";
 import { currentAppearance, DEFAULT_MONO_STACK, onAppearance } from "./appearance";
 import { DEFAULT_THEME, type Theme } from "../theme/themes";
 
@@ -62,6 +63,21 @@ export interface AttachOptions {
   cmd?: string;
   /** Focus the terminal once it is attached and wired. */
   autoFocus?: boolean;
+  /**
+   * Leave the editing keys `lib/terminalKeys` translates to xterm while the
+   * alternate screen buffer is active, i.e. while a full-screen program owns the
+   * terminal. Defaults to true, which is what an arbitrary shell needs: `vim`,
+   * `less` and `htop` parse `CSI 1;5D` as Ctrl+ArrowLeft and read `\x1bb` as an
+   * Escape followed by a `b`, which in vim's insert mode means leaving insert
+   * mode rather than moving a word.
+   *
+   * The Claude Code session passes false, because Claude Code occupies the
+   * alternate buffer for its whole run — it emits `ESC [?1049h` at startup and
+   * never leaves — so respecting the buffer there would disable the translation
+   * exactly where it is aimed. That is only safe because we know what runs in
+   * that session; a session running something arbitrary must keep the default.
+   */
+  respectAlternateScreen?: boolean;
   onExit?: (info: PtyExitInfo) => void;
   /** Called when spawning or wiring the session fails. */
   onError?: (error: unknown) => void;
@@ -88,22 +104,6 @@ interface Entry {
 }
 
 const RESIZE_DEBOUNCE_MS = 100; // ConPTY glitches on rapid resize storms
-
-/**
- * What Shift+Enter sends instead of a bare CR: meta+Return.
- *
- * xterm encodes Shift+Enter as `\r`, indistinguishable from Enter, so without
- * this the key submits the prompt rather than extending it. `\x1b\r` is the
- * sequence iTerm2 and VS Code bind for Shift+Enter — and what Claude Code's own
- * `/terminal-setup` writes — so Claude Code reads it as meta+Return and inserts
- * a newline.
- *
- * Sent in the shell terminal too, deliberately. No byte sequence inserts a
- * newline at a bash or zsh prompt (LF *is* accept-line there), and `\x1b\r` is
- * unbound in readline, so Shift+Enter becomes a no-op in the shell rather than
- * submitting a line the user did not mean to run.
- */
-export const SHIFT_ENTER = "\x1b\r";
 
 const entries = new Map<string, Entry>();
 
@@ -245,21 +245,30 @@ async function initialize(
     void invoke("pty_write", { id: opts.id, data: stringToBase64(data) });
   });
 
-  // Shift+Enter, which xterm would otherwise encode as a plain CR. Registered
-  // here rather than at Terminal construction because it needs the session id,
-  // and it is a setter, so a re-attach simply replaces it.
+  // Keys whose xterm encoding is not what a line editor reads: Shift+Enter, and
+  // word and line editing. The table is `lib/terminalKeys`. Registered here
+  // rather than at Terminal construction because it needs the session id, and it
+  // is a setter, so a re-attach simply replaces it.
   //
-  // A user who binds Shift+Enter to an app action in config.json shadows this:
+  // A user who binds one of these to an app action in config.json shadows it:
   // useGlobalKeybindings listens in the capture phase precisely so a bound key
-  // never reaches xterm.
+  // never reaches xterm. The settings window refuses them (`RESERVED` in
+  // `lib/keybindings`), so only a hand-edited file can.
+  const respectAlternateScreen = opts.respectAlternateScreen ?? true;
   e.term.attachCustomKeyEventHandler((event) => {
-    if (event.type !== "keydown" || event.key !== "Enter") return true;
-    if (!event.shiftKey || event.ctrlKey || event.altKey || event.metaKey) return true;
+    // A full-screen program owns the terminal, and it parses xterm's own
+    // encodings rather than the line-editor ones. See `respectAlternateScreen`.
+    if (respectAlternateScreen && e.term.buffer.active.type === "alternate") return true;
+    const sequence = sequenceFor(event);
+    if (sequence === null) return true;
     // preventDefault as well as returning false: xterm returns early on a false
     // handler, before its own preventDefault, which would leave the browser
-    // inserting a newline into the hidden textarea xterm manages.
+    // applying the key to the hidden textarea xterm manages — a newline for
+    // Shift+Enter, a word cut out of it for Ctrl+Backspace — and letting the
+    // webview navigate back out of the app: Alt+ArrowLeft does that on Windows
+    // and Linux, Cmd+ArrowLeft in WKWebView on macOS.
     event.preventDefault();
-    void invoke("pty_write", { id: opts.id, data: stringToBase64(SHIFT_ENTER) });
+    void invoke("pty_write", { id: opts.id, data: stringToBase64(sequence) });
     return false;
   });
 

@@ -27,4 +27,11 @@ describe("MainPanel", () => {
       autoFocus: true,
     });
   });
+
+  it("opts out of standing the editing keys down on the alternate screen", () => {
+    // Claude Code occupies that buffer for its whole run, so the guard the shell
+    // terminal wants would disable word editing at this prompt.
+    render(<MainPanel />);
+    expect(hoisted.props.at(-1)).toMatchObject({ respectAlternateScreen: false });
+  });
 });

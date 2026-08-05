@@ -56,6 +56,16 @@ describe("TerminalView", () => {
     expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument();
   });
 
+  it("forwards the alternate-screen opt-out, and defaults to leaving it unset", () => {
+    // Unset means `attach` applies its own default (respect the buffer), which is
+    // what any session but Claude Code's needs.
+    renderShell();
+    expect(hoisted.attachMock.mock.calls[0][1].respectAlternateScreen).toBeUndefined();
+
+    render(<TerminalView sessionId="claude-main" cmd="claude" respectAlternateScreen={false} />);
+    expect(hoisted.attachMock.mock.calls[1][1]).toMatchObject({ respectAlternateScreen: false });
+  });
+
   it("detaches on unmount", () => {
     const { unmount } = renderView();
     unmount();

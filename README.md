@@ -122,15 +122,83 @@ through the PAT, the workflow's own `permissions:` block is not what authorises 
 
 Each part is an independent piece of work, executed in order, and its entry below *is* its plan — rationale, scope and acceptance criteria. A part is done only when those pass on macOS, Linux and Windows, and it is then **removed** from this list rather than ticked, with the rest renumbered. A number is therefore a position in the queue and not a stable id: what shipped and why is in `CHANGELOG.md` and the git history, and code comments name the number a part had at the time.
 
+- [ ] word and line editing in both terminals. The editing keys every other text field on the
+      machine has do not work at the Claude Code prompt: Ctrl+Backspace deletes a single
+      character rather than a word, and Ctrl+Arrow moves nothing. They are not swallowed by the
+      app, they are mistranslated — xterm encodes them as `CSI 1;5D`, `CSI 1;5C` and a bare
+      `^H`, and `^H` *is* `backward-delete-char`, in every line editor, which is why
+      Ctrl+Backspace was broken at the shell prompt too. Ctrl+Arrow is the uneven one: readline's
+      default emacs keymap binds both CSI forms to word motion, so it already worked at a bash
+      prompt with no inputrc at all, while zsh binds neither and Claude Code is not readline and
+      reads no inputrc. The meta forms are the one spelling all three accept, so one pure table,
+      `src/lib/terminalKeys.ts`, maps to those (`\x1bb`, `\x1bf`, `\x1b\x7f`, `\x1bd`) and writes
+      them through the same custom key handler and `pty_write` that Shift+Enter already used;
+      `SHIFT_ENTER` moves into that table so there is only one. No backend change:
+      `pty_write` is byte-transparent. Alt+Arrow, Alt+Backspace and Alt+Delete are in the table
+      as well as the Ctrl spellings, and are what make the feature work on macOS at all, where
+      Ctrl+Arrow is Mission Control's "move a space" and never reaches the webview. Cmd+Arrow
+      and Cmd+Backspace map to line motion (`\x01`, `\x05`, `\x15`) on macOS only, because Meta
+      is Super on Linux and Windows, where `\x15` would silently discard a typed line if a
+      window manager ever let it through. Modifiers match exactly, so Ctrl+Shift+Arrow stays
+      with xterm (a terminal has no input selection to extend), and a keystroke inside an IME
+      composition is left alone. Cmd+Delete stays mis-encoded on purpose (xterm sends
+      `CSI 3;9~`): macOS has no Cmd+Delete text gesture to honour, so a row for it would mean
+      inventing the gesture. The translation also **stands down while the alternate screen
+      buffer is active**, because `vim`, `less` and `htop` parse `CSI 1;5D` and read `\x1bb` as
+      Escape-then-`b`, which in vim's insert mode leaves insert mode. That guard is per session
+      rather than global: Claude Code occupies the alternate buffer from startup to exit
+      (verified — it emits `ESC [?1049h` 13 bytes into its output and never leaves), so the
+      obvious global form of the check would disable the whole feature exactly where it is
+      aimed. `MainPanel` passes `respectAlternateScreen={false}`, safe only because it is the one
+      session whose program is known; the shell terminal keeps the default.
+      The guard is all-or-nothing across the table, and that has one accepted cost: a `claude`
+      launched by hand in the bottom terminal loses Shift+Enter, because it sits in the alternate
+      buffer too, so the prompt submits instead of extending. It worked there before this part,
+      and the path is not hypothetical — "Retry in terminal" writes into that region
+      (`TerminalPanel`, session `shell-main`). Deliberately not coded around: exempting
+      Shift+Enter would re-break the vim case the guard exists for, since in insert mode a bare
+      CR inserts a newline while `\x1b\r` leaves insert mode, and nothing a terminal exposes
+      separates a TUI that parses CSI from a TUI that is itself a line editor. If it ever needs
+      solving, the answer is a per-session opt-out on that region and not a special case in the
+      table. All eleven
+      combinations, plus the numpad spellings of the arrows, go into `RESERVED` in
+      `src/lib/keybindings.ts` for the workspace scope, so the settings window refuses to bind
+      an app action over one and break editing silently.
+      Acceptance: at both prompts, Ctrl+Arrow (Linux, Windows) and Option+Arrow (macOS) move by
+      word with no escape sequence printed; Ctrl+Backspace and Ctrl+Delete kill the word either
+      side of the cursor; Cmd+Arrow and Cmd+Backspace do line motion on macOS and nothing
+      changes elsewhere; plain arrows, plain Backspace and Alt+digit are unchanged; Shift+Enter
+      still inserts a newline in Claude Code; Alt+ArrowLeft does not navigate the webview back;
+      the settings window refuses Ctrl+ArrowLeft with a reason; and in the shell terminal
+      `vim` in insert mode still moves a word on Ctrl+ArrowLeft rather than leaving insert mode,
+      which is the alternate-screen guard doing its job.
+      Outstanding: **the interactive pass in the running app is not done on any platform.** What
+      is verified is the automated half — both suites green — plus every byte in the table
+      checked against `bind -p` and `bindkey` on Linux, which is what makes the sequences right
+      but says nothing about whether the keystroke reaches the handler. Still to confirm, in the
+      app: all three platforms for the rows themselves; Windows and Linux for Alt+ArrowLeft not
+      navigating the webview back; macOS for the whole Ctrl tier being unreachable (Mission
+      Control) and the Cmd tier working; and everywhere whether Claude Code's own input
+      implements `M-d` (forward kill-word), the one row with real uncertainty — it is correct at
+      a shell prompt either way. The pass should also walk the accepted cost above, so it is
+      recognised on sight rather than filed as a regression: run `claude` in the bottom terminal
+      and confirm Shift+Enter submits there while the main pane still extends the prompt, and
+      that Ctrl+Backspace is likewise inert in that hand-launched session.
 - [ ] auto update
 - [ ] help menu with `check for update` and `about` pages
 - [ ] view menu with theme selector and zoom
 - [ ] have files opening in place of claude code instead of opening in a new window (it should be faster)
 - [ ] more code-window view settings (the diff window has a Compact toggle; the registry is
       `src/editor/viewOptions.ts`, so each new setting is an entry there plus a handler)
-- [ ] ctrl+arrows to move between spaces
+- [ ] a shortcut to move focus between the regions (Claude Code, the bottom terminal, the Status
+      panel). **Not** Ctrl+Arrow, which this list used to say: that is now word motion in the
+      terminals, and it could never have worked on all three platforms anyway, since macOS gives
+      Ctrl+Arrow to Mission Control before the app sees it. The accelerator is undecided and has
+      to be picked before this is built — anything the terminals translate is out
+      (`src/lib/terminalKeys.ts`), because `useGlobalKeybindings` swallows a bound key in the
+      capture phase and it would never reach xterm. Consider folding in the entry below it:
+      both are focus management.
 - [ ] when a tool (terminal or git) is closed with a shortcut (eg. alt+1), move focus on claude
-- [ ] allow doing ctrl+backspace to remove a word in terminal or claude
 
 ## Global decisions
 
