@@ -79,7 +79,9 @@ impl DiffWindows {
         // A poisoned lock here means a panic while holding it, and the map is
         // plain data: recovering is strictly better than taking the app down with
         // it, since the worst case is one duplicate window.
-        self.0.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
+        self.0
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
     }
 
     /// How many windows are on record. Tests only.
@@ -175,7 +177,12 @@ mod tests {
         // A second click landing while the first window is still booting. Creating
         // here would open the duplicate the registry exists to prevent.
         assert_eq!(
-            decide(&HashMap::new(), &alive(&["diff-b"]), &file("/r", "b.ts"), "diff-b"),
+            decide(
+                &HashMap::new(),
+                &alive(&["diff-b"]),
+                &file("/r", "b.ts"),
+                "diff-b"
+            ),
             Route::Focus("diff-b".into())
         );
     }
@@ -205,7 +212,12 @@ mod tests {
         // then write to, the wrong file.
         let map = shown(&[("diff-a", file("/other", "src/main.rs"))]);
         assert_eq!(
-            decide(&map, &alive(&["diff-a"]), &file("/r", "src/main.rs"), "diff-b"),
+            decide(
+                &map,
+                &alive(&["diff-a"]),
+                &file("/r", "src/main.rs"),
+                "diff-b"
+            ),
             Route::Create
         );
     }

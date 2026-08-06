@@ -8,10 +8,18 @@ Desktop app: Claude Code embedded in a terminal, wrapped with live git tooling (
 npm run tauri dev                                  # run app in dev mode
 npm run tauri build                                # release bundles
 cargo test --manifest-path src-tauri/Cargo.toml    # backend tests
+cargo fmt --all --manifest-path src-tauri/Cargo.toml
 cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings
 npm test                                           # frontend tests (vitest)
 npm run lint                                       # eslint + tsc --noEmit
 ```
+
+**These five are the whole of what CI runs** (`.github/workflows/ci.yml`), and the
+flags are part of them. `cargo fmt --all --check` and `cargo clippy --all-targets`
+are the two that have actually caught a PR out: the first because rustfmt is easy
+to forget on a new file, the second because without `--all-targets` clippy never
+sees the test target, so a lint on a `#[cfg(test)]` item passes locally and fails
+there. Run all five before pushing, not just the suites.
 
 ## Architecture rules
 
@@ -26,7 +34,7 @@ npm run lint                                       # eslint + tsc --noEmit
 
 ## Code style
 
-- Rust: rustfmt defaults, clippy clean with `-D warnings`. **`--all-targets` is not optional** — without it clippy never sees the test target, and CI (`ci.yml`) does pass it, so a lint that only fires on a `#[cfg(test)]` item passes locally and fails there.  Errors via `thiserror` in library code; Tauri commands return `Result<T, String>` with actionable messages.
+- Rust: rustfmt defaults, clippy clean with `-D warnings`. See the Commands block for the two flags CI passes and it is easy not to. Errors via `thiserror` in library code; Tauri commands return `Result<T, String>` with actionable messages.
 - TypeScript: strict mode, no `any` without a justifying comment. Components are function components; hooks for logic, components for rendering.
 - No secrets, credentials or real hostnames anywhere in code, tests or fixtures.
 
