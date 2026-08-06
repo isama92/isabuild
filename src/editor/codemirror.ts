@@ -127,12 +127,11 @@ function themeFor(theme: Theme): Extension {
       ".cm-gutterElement.isabuild-arrow:hover": { color: t.textBright },
       ".cm-gutterElement.isabuild-arrow svg": { width: "14px", height: "14px" },
       // The arrow column sits against the pane's edge with nothing between it and
-      // the next pane, so it needs the seam drawn. The package gives
-      // `.cm-gutters-after` a left border in its light theme only; both sides get
-      // one here, from the registry.
-      ".cm-gutters.isabuild-arrow-gutter, .cm-gutters-after": {
-        borderLeft: `1px solid ${t.border}`,
-      },
+      // the next pane, so it needs the seam drawn. `.cm-gutter`, singular: the
+      // `class` given to `gutter()` lands on the individual column, while
+      // `.cm-gutters` is the container holding all of them — a selector joining
+      // the two can never match anything.
+      ".cm-gutter.isabuild-arrow-gutter": { borderLeft: `1px solid ${t.border}` },
 
       // --- @codemirror/merge's own classes, retinted from the registry -------
       //

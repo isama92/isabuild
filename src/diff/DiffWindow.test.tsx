@@ -521,8 +521,13 @@ describe("DiffWindow", () => {
 });
 
 describe("stepping between changed files", () => {
-  /** The default accelerator for next/previous file. Bubble phase, as the hook listens. */
-  function pressAltArrow(code: "ArrowLeft" | "ArrowRight") {
+  /**
+   * The default accelerator for next/previous file. Bubble phase, as the hook listens.
+   *
+   * Alt+Page, not Alt+Arrow: the horizontal arrows are word motion inside a
+   * CodeMirror pane on every platform. See the note on the registry entries.
+   */
+  function pressAltPage(code: "PageUp" | "PageDown") {
     window.dispatchEvent(
       new KeyboardEvent("keydown", { code, altKey: true, bubbles: true, cancelable: true }),
     );
@@ -750,7 +755,7 @@ describe("stepping between changed files", () => {
   });
 
   it("does not stack navigations when the key is held down", async () => {
-    // Alt+ArrowRight autorepeats. The guard only has anything to do when
+    // Alt+PageDown autorepeats. The guard only has anything to do when
     // `goToFile` actually suspends, so there has to be an edit for it to flush and
     // that flush has to be in flight when the second press arrives — otherwise the
     // whole of `goToFile` runs synchronously and the flag is back down before the
@@ -771,10 +776,10 @@ describe("stepping between changed files", () => {
 
     // First press suspends on the flush; the second must be refused outright.
     await act(async () => {
-      pressAltArrow("ArrowRight");
+      pressAltPage("PageDown");
     });
     await act(async () => {
-      pressAltArrow("ArrowRight");
+      pressAltPage("PageDown");
     });
     await act(async () => {
       releaseWrite();
@@ -784,7 +789,7 @@ describe("stepping between changed files", () => {
     expect(getFileDiffMock.mock.calls.length - before).toBe(1);
   });
 
-  it("walks the list on Alt+Arrow, the accelerator the settings offer", async () => {
+  it("walks the list on Alt+Page, the accelerator the settings offer", async () => {
     // The buttons and the keybinding are separate paths into `step`, and until now
     // only the buttons were covered.
     await renderReady();
@@ -792,7 +797,7 @@ describe("stepping between changed files", () => {
     getFileDiffMock.mockResolvedValue(fileDiff({ path: "src/after.ts" }));
 
     await act(async () => {
-      pressAltArrow("ArrowRight");
+      pressAltPage("PageDown");
     });
 
     expect(getFileDiffMock).toHaveBeenLastCalledWith({
@@ -802,13 +807,13 @@ describe("stepping between changed files", () => {
     });
   });
 
-  it("walks it backwards on Alt+ArrowLeft", async () => {
+  it("walks it backwards on Alt+PageUp", async () => {
     await renderReady();
     await screen.findByText("2 / 3 files");
     getFileDiffMock.mockResolvedValue(fileDiff({ path: "src/before.ts" }));
 
     await act(async () => {
-      pressAltArrow("ArrowLeft");
+      pressAltPage("PageUp");
     });
 
     expect(getFileDiffMock).toHaveBeenLastCalledWith({
@@ -844,13 +849,14 @@ describe("stepping between changed files", () => {
     expect(screen.getByRole("button", { name: "Next changed file" })).toBeEnabled();
     expect(screen.getByRole("button", { name: "Previous changed file" })).toBeEnabled();
 
-    getFileDiffMock.mockResolvedValue(fileDiff({ path: "src/after.ts" }));
+    getFileDiffMock.mockResolvedValue(fileDiff({ path: "src/middle.ts" }));
     await nextFile();
 
-    // Lands on whatever now occupies the slot after the one it held.
+    // Lands on the file that took the slot, not on the one after it — otherwise
+    // `middle.ts` would be unreachable in either direction from here.
     expect(getFileDiffMock).toHaveBeenLastCalledWith({
       repoRoot: "/r",
-      path: "src/after.ts",
+      path: "src/middle.ts",
       origPath: undefined,
     });
   });

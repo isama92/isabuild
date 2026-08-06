@@ -239,13 +239,22 @@ Each part is an independent piece of work, executed in order, and its entry belo
       `gutter({ side: "after" })` puts the ours arrow on the ours/result seam and raising the
       theirs gutter above `lineNumbers()` puts its arrow on the result/theirs seam. `lib/mergeAlign`
       is purely vertical, so the alignment cannot be affected.
+      **Not Alt+Arrow for the file pair**, which is the obvious horizontal partner to Alt+↑/↓ and
+      cannot be used: `defaultKeymap` binds it twice over, as `cursorSyntax*` on Linux and Windows
+      and as `cursorGroup*` on macOS through a `mac` alias carrying `preventDefault: true`. So on
+      macOS the window's binding could never fire at all, and claiming the chord in
+      `CLAIMED_BY_THE_APP` would drop six bindings rather than two — costing Ctrl+Arrow word motion
+      on Linux and Windows and Alt+Arrow word motion on macOS, inside an editable pane, in an app
+      whose previous part was entirely about word motion. Alt+PageUp/PageDown is free everywhere.
+      `codemirror.test` now derives its collision check from the keybinding registry, so the next
+      accelerator that repeats this fails there rather than in someone's hands.
       Icons are `lucide-react`, the app's first UI dependency. `ToolbarButton.label` stays the
       accessible name when an `icon` is given, so every existing `getByRole("button", { name })`
       keeps working. `renderRevertControl` and `GutterMarker.toDOM()` need real DOM nodes rather
       than React, so `editor/iconElement.ts` builds those two chevrons with `createElementNS`, with
       a test pinning its path data against the real lucide component so the two cannot drift.
       Acceptance: the toolbar reads as the mockup and every icon button has a tooltip; ↑/↓ and
-      Alt+↑/Alt+↓ walk changes, ←/→ and Alt+←/Alt+→ walk files with the counter tracking and both
+      Alt+↑/Alt+↓ walk changes, ←/→ and Alt+PageUp/PageDown walk files with the counter tracking and both
       disabling at the ends; typing in a file and pressing Next File writes the edit to the file
       being *left*; navigating away from a file and then clicking it in the Status panel returns
       the *same* window to it rather than opening a second; switching Split/Unified keeps an

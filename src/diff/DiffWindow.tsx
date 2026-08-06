@@ -21,12 +21,7 @@ import { EditorWindow, type Notice } from "../editor/EditorWindow";
 import { Icons } from "../editor/icons";
 import { useEditorWindow, type NavigableWindowTarget } from "../editor/useEditorWindow";
 import { useWindowKeybindings } from "../hooks/useWindowKeybindings";
-import {
-  changedFiles,
-  indexOfPath,
-  reanchor,
-  type ChangedFile,
-} from "../lib/changedFiles";
+import { changedFiles, indexOfPath, stepTarget, type ChangedFile } from "../lib/changedFiles";
 import { onShowFile, registerDiffWindow } from "../lib/diffRegistry";
 import { getStatus } from "../lib/gitStatus";
 import { shouldAdoptDiskContent } from "../lib/diffSync";
@@ -84,7 +79,7 @@ export function DiffWindow() {
    * — and the notice has to grow a sentence explaining how to move on anyway.
    */
   const [navigateInsisted, setNavigateInsisted] = useState(false);
-  /** Whether a navigation is already in flight. Alt+ArrowRight autorepeats. */
+  /** Whether a navigation is already in flight. Alt+PageDown autorepeats. */
   const navigatingRef = useRef(false);
   /**
    * Where the window sat before the list last moved; see `reanchor`.
@@ -97,6 +92,8 @@ export function DiffWindow() {
   const lastIndexRef = useRef(0);
   /** Guards overlapping status reads, one per debounced watcher event. */
   const statusInFlightRef = useRef(false);
+  /** Whether an event arrived while a read was in flight and still needs serving. */
+  const statusPendingRef = useRef(false);
 
   /**
    * Which file this window is on, counted rather than named.
@@ -246,19 +243,34 @@ export function DiffWindow() {
    * diff, which is the actual job of this window.
    */
   const refreshFiles = useCallback((repoRoot: string) => {
-    if (statusInFlightRef.current) return;
-    statusInFlightRef.current = true;
-    void getStatus(repoRoot)
-      .then((status) => {
-        // The project was switched under this window. Its own close is already on
-        // the way; a list from another repository is worse than a stale one.
-        if (status.repoRoot !== repoRoot) return;
-        setFiles(changedFiles(status));
-      })
-      .catch(() => undefined)
-      .finally(() => {
-        statusInFlightRef.current = false;
-      });
+    // Coalesced, not dropped. Returning outright would discard the event that
+    // actually created or removed a file if it arrived while a slow read was in
+    // flight, and nothing would ask again — the counter, the buttons and the set
+    // of files `step` can reach would all describe the repo as it was two events
+    // ago, while the diff body beside them refreshed correctly.
+    if (statusInFlightRef.current) {
+      statusPendingRef.current = true;
+      return;
+    }
+    // A local recursion rather than calling `refreshFiles` again, which would make
+    // it its own dependency.
+    const run = (root: string) => {
+      statusInFlightRef.current = true;
+      statusPendingRef.current = false;
+      void getStatus(root)
+        .then((status) => {
+          // The project was switched under this window. Its own close is already
+          // on the way; a list from another repository is worse than a stale one.
+          if (status.repoRoot !== root) return;
+          setFiles(changedFiles(status));
+        })
+        .catch(() => undefined)
+        .finally(() => {
+          statusInFlightRef.current = false;
+          if (statusPendingRef.current) run(root);
+        });
+    };
+    run(repoRoot);
   }, []);
 
   // Annotated rather than inferred, and deliberately so: the callbacks below read
@@ -346,7 +358,7 @@ export function DiffWindow() {
    *
    * The order matters, and every step of it is load-bearing:
    *
-   * 1. Refuse to re-enter. Alt+ArrowRight autorepeats, and without this a held key
+   * 1. Refuse to re-enter. Alt+PageDown autorepeats, and without this a held key
    *    stacks flushes and loads.
    * 2. Flush into the file being *left*, named explicitly.
    * 3. If that write failed, stay — with the error already on screen — and let a
@@ -440,11 +452,10 @@ export function DiffWindow() {
   const current = target.params;
   const step = useCallback(
     (delta: -1 | 1) => {
-      if (current === undefined || files.length === 0) return;
-      // `reanchor` rather than `position.index`, so a Next from a file that has
-      // just been committed away still goes somewhere sensible.
-      const from = reanchor(files, current.path, lastIndexRef.current);
-      const to = files[from + delta];
+      if (current === undefined) return;
+      // Not `position.index + delta`: a file committed away while open has no
+      // index, and the slot it held is now someone else's. See `stepTarget`.
+      const to = stepTarget(files, current.path, lastIndexRef.current, delta);
       if (!to) return;
       void goToFile({ repoRoot: current.repoRoot, path: to.path, origPath: to.origPath });
     },

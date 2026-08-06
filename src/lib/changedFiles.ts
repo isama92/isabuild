@@ -98,6 +98,34 @@ export function reanchor(
 }
 
 /**
+ * The file a step in `delta` should land on, or null when there is none.
+ *
+ * The delta is *not* simply added to `reanchor`'s answer, and that is the whole
+ * reason this is a function rather than one line at the call site. When the shown
+ * file is still in the list the two agree — its index plus the delta. When it has
+ * gone, `reanchor` returns the slot it used to hold, and that slot is now occupied
+ * by a *different* file the user has not seen; adding the delta on top would step
+ * straight over it. Showing `[before, a, after]`, committing `a` away for
+ * `[before, middle, after]`, Next would give `after` and Previous would give
+ * `before`, leaving `middle` unreachable in either direction.
+ *
+ * So a vanished file is treated as sitting *between* two slots: Next lands on the
+ * one that took its place, Previous on the one before it.
+ */
+export function stepTarget(
+  files: readonly ChangedFile[],
+  currentPath: string,
+  previousIndex: number,
+  delta: -1 | 1,
+): ChangedFile | null {
+  if (files.length === 0) return null;
+  const index = indexOfPath(files, currentPath);
+  const anchor = reanchor(files, currentPath, previousIndex);
+  const target = index === -1 ? (delta === 1 ? anchor : anchor - 1) : index + delta;
+  return files[target] ?? null;
+}
+
+/**
  * Whether this path is staged and then changed again.
  *
  * The one thing the Status panel shares with this module. It words its "stage the

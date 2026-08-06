@@ -61,9 +61,9 @@ describe("useViewOptions", () => {
     expect(seen?.state["collapse-unchanged"]).toBe(false);
   });
 
-  it("persists a toggle", () => {
+  it("persists a change", () => {
     render(<Harness />);
-    seen?.toggle("collapse-unchanged");
+    seen?.set("collapse-unchanged", true);
     expect(save).toHaveBeenCalledWith({ viewOptions: { "collapse-unchanged": true } });
   });
 
@@ -74,7 +74,7 @@ describe("useViewOptions", () => {
     useSettingsStore.setState({ settings: null });
     render(<Harness />);
 
-    seen?.toggle("collapse-unchanged");
+    seen?.set("collapse-unchanged", true);
 
     expect(save).not.toHaveBeenCalled();
   });
@@ -84,7 +84,7 @@ describe("useViewOptions", () => {
     // one wrote — so rolling back to chase a bug would silently lose settings.
     useSettingsStore.setState({ settings: settings({ "from-the-future": true }) });
     render(<Harness />);
-    seen?.toggle("collapse-unchanged");
+    seen?.set("collapse-unchanged", true);
 
     expect(save).toHaveBeenCalledWith({
       viewOptions: { "from-the-future": true, "collapse-unchanged": true },
@@ -96,7 +96,7 @@ describe("useViewOptions", () => {
     // what you changed and nothing else.
     useSettingsStore.setState({ settings: settings({ "collapse-unchanged": true }) });
     render(<Harness />);
-    seen?.toggle("collapse-unchanged");
+    seen?.set("collapse-unchanged", false);
 
     expect(save).toHaveBeenCalledWith({ viewOptions: {} });
   });
@@ -110,16 +110,16 @@ describe("useViewOptions", () => {
     expect(seen?.state).toBe(first);
   });
 
-  it("toggles against the settings as they now stand, not as they were rendered", () => {
-    // Another window's toggle arrives through `settings://changed` between this
-    // window's render and its click; reading the store at click time is what stops
-    // the click flipping a value that has already moved.
+  it("writes against the settings as they now stand, not as they were rendered", () => {
+    // Another window's change arrives through `settings://changed` between this
+    // window's render and its click. Reading the store at click time is what makes
+    // the write merge into what is actually stored — here, dropping the override
+    // rather than writing `false` into a map built from a stale read.
     render(<Harness />);
     useSettingsStore.setState({ settings: settings({ "collapse-unchanged": true }) });
 
-    seen?.toggle("collapse-unchanged");
+    seen?.set("collapse-unchanged", false);
 
-    // Off again, so the override is dropped rather than written as `false`.
     expect(save).toHaveBeenCalledWith({ viewOptions: {} });
   });
 
@@ -143,8 +143,8 @@ describe("useViewOptions", () => {
     });
 
     it("swallows the click while the settings have not arrived", () => {
-      // Same guard `toggle` has, and for the same reason: a map built from `{}`
-      // would erase every override this build does not recognise.
+      // The map is replaced wholesale, so a write built from `{}` would erase every
+      // override this build does not recognise.
       useSettingsStore.setState({ settings: null });
       render(<Harness />);
 

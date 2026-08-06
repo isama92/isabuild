@@ -34,7 +34,7 @@ const SVG_NS = "http://www.w3.org/2000/svg";
  * called once per line that has one, and the same element cannot be in two
  * places. Cheap enough — two `<path>`s, and only for lines that carry a control.
  */
-export function iconElement(name: IconName): SVGSVGElement {
+export function iconElement(name: IconName, tooltip?: string): SVGSVGElement {
   const svg = document.createElementNS(SVG_NS, "svg");
   svg.setAttribute("viewBox", "0 0 24 24");
   svg.setAttribute("fill", "none");
@@ -42,9 +42,20 @@ export function iconElement(name: IconName): SVGSVGElement {
   svg.setAttribute("stroke-width", "2");
   svg.setAttribute("stroke-linecap", "round");
   svg.setAttribute("stroke-linejoin", "round");
-  // Decorative in both call sites: the button around it carries the label.
-  svg.setAttribute("aria-hidden", "true");
   svg.setAttribute("class", `ib-icon ib-icon--${name}`);
+  if (tooltip === undefined) {
+    // Decorative: something around it carries the label, as the diff window's
+    // revert `<button>` does with its own `title` and `aria-label`.
+    svg.setAttribute("aria-hidden", "true");
+  } else {
+    // A `<title>` *child*, not a `title` attribute. `title` is a global HTML
+    // attribute and an `<svg>` is not an HTML element, so setting it there paints
+    // no tooltip at all — which is how the merge window's gutter arrows ended up
+    // with no affordance while a test asserting the attribute stayed green.
+    const title = document.createElementNS(SVG_NS, "title");
+    title.textContent = tooltip;
+    svg.appendChild(title);
+  }
   for (const d of PATHS[name]) {
     const path = document.createElementNS(SVG_NS, "path");
     path.setAttribute("d", d);

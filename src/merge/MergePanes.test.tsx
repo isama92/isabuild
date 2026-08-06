@@ -261,15 +261,19 @@ describe("MergePanes", () => {
     });
 
     it("draws each arrow as an icon that says what it does", () => {
-      // CodeMirror marks the whole gutter `aria-hidden`, so the title is for a
-      // pointer and the toolbar is the accessible route to the same actions.
+      // A `<title>` *child*, which is how an SVG carries a tooltip — `title` as an
+      // attribute is HTML-only and paints nothing on an `<svg>`, so asserting the
+      // attribute would pass while the arrows had no affordance at all. CodeMirror
+      // marks the whole gutter `aria-hidden`, so this is for a pointer and the
+      // toolbar is the accessible route to the same actions.
       setup();
-      const arrow = screen.getByTestId("pane-ours").querySelector(".isabuild-arrow svg");
-      expect(arrow).not.toBeNull();
-      expect(arrow).toHaveAttribute("title", "Replace this chunk with your version");
-      expect(
-        screen.getByTestId("pane-theirs").querySelector(".isabuild-arrow svg"),
-      ).toHaveAttribute("title", "Replace this chunk with their version");
+      const ours = screen.getByTestId("pane-ours").querySelector(".isabuild-arrow svg > title");
+      const theirs = screen
+        .getByTestId("pane-theirs")
+        .querySelector(".isabuild-arrow svg > title");
+
+      expect(ours).toHaveTextContent("Replace this chunk with your version");
+      expect(theirs).toHaveTextContent("Replace this chunk with their version");
     });
   });
 

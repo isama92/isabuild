@@ -26,12 +26,14 @@ export interface ViewOptions {
   /** Resolved state for every option in the registry, id-keyed. */
   state: ViewOptionState;
   /**
-   * Write a value. A segmented pair needs this rather than a flip: clicking the
-   * face that is already on must be a no-op, not the way back.
+   * Write a value.
+   *
+   * There is deliberately no `toggle` beside it. A segmented pair needs to be able
+   * to say "be false" — clicking the face that is already on must be a no-op, not
+   * the way back — so every caller moved to this, and a flip helper would have been
+   * a second read of the store between this one's read and its write.
    */
   set: (id: string, value: boolean) => void;
-  /** `set(id, !current)`, for the callers that only ever flip. */
-  toggle: (id: string) => void;
 }
 
 /**
@@ -97,14 +99,5 @@ export function useViewOptions(): ViewOptions {
     [save],
   );
 
-  const toggle = useCallback(
-    (id: string) => {
-      const settings = useSettingsStore.getState().settings;
-      if (settings === null) return;
-      set(id, !resolveViewOptions(settings.viewOptions)[id]);
-    },
-    [set],
-  );
-
-  return { state, set, toggle };
+  return { state, set };
 }

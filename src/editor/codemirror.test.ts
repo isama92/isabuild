@@ -14,6 +14,7 @@ import {
   themeTransaction,
 } from "./codemirror";
 import { DEFAULT_THEME, themeById } from "../theme/themes";
+import { ACTIONS } from "../lib/keybindings";
 
 /**
  * The rules CodeMirror injected for a state's theme, flattened to one string.
@@ -179,7 +180,7 @@ describe("searchExtensions", () => {
 });
 
 describe("PANE_KEYMAP", () => {
-  it("gives up the two combinations the app binds to its own navigation", () => {
+  it("gives up the combinations the app binds to its own navigation", () => {
     // `defaultKeymap` maps Alt+ArrowUp/Down to moveLineUp/moveLineDown, and those
     // are also the defaults for next/previous change and next/previous conflict.
     // CodeMirror wins that race and marks the event handled, so the keystroke would
@@ -191,6 +192,44 @@ describe("PANE_KEYMAP", () => {
       ),
     );
     expect(claimed).toEqual([]);
+  });
+
+  /**
+   * Chords a pane is *allowed* to consume before the window sees them.
+   *
+   * Only Escape, and deliberately: `useWindowKeybindings` skips an event something
+   * else has handled, which is what lets Escape dismiss the find panel first and
+   * close the window only when there was no panel to dismiss.
+   */
+  const SHARED_WITH_THE_PANES = new Set(["Escape"]);
+
+  it("gives up every chord the diff and merge windows bind, on every platform", () => {
+    // The generalisation of the case above, and the reason it is generalised: the
+    // horizontal Alt+Arrow pair went into the registry without going in here, and
+    // nothing failed — the window tests dispatch on `window` with no CodeMirror in
+    // the loop, so a keybinding that could never fire in the app looked covered.
+    //
+    // Derived from the registry rather than listed, so the next accelerator added
+    // to a pane's scope is checked against what the panes already eat, on every
+    // platform's spelling rather than just `key`.
+    const asChords = new Set(
+      ACTIONS.filter(
+        (action) => action.scopes.includes("diff") || action.scopes.includes("merge"),
+      )
+        .map((action) => action.defaultAccelerator)
+        .filter((accelerator) => !SHARED_WITH_THE_PANES.has(accelerator))
+        // The registry spells a chord "Alt+PageDown"; CodeMirror spells it
+        // "Alt-PageDown". Same thing, different separator.
+        .map((accelerator) => accelerator.replace(/\+/g, "-")),
+    );
+
+    const collisions = PANE_KEYMAP.filter((binding) =>
+      [binding.key, binding.mac, binding.win, binding.linux].some(
+        (chord) => chord !== undefined && asChords.has(chord),
+      ),
+    ).map((binding) => binding.key ?? binding.mac);
+
+    expect(collisions).toEqual([]);
   });
 
   it("keeps the shifted pair, which the app has not bound", () => {

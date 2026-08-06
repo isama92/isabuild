@@ -4,6 +4,7 @@ import {
   indexOfPath,
   isStagedAndModified,
   reanchor,
+  stepTarget,
   type ChangeGroups,
 } from "./changedFiles";
 import type { ChangeStatus, FileEntry } from "./gitStatus";
@@ -111,6 +112,48 @@ describe("reanchor", () => {
 
   it("has no answer for an empty list", () => {
     expect(reanchor([], "a.ts", 0)).toBe(-1);
+  });
+});
+
+describe("stepTarget", () => {
+  const three = changedFiles(groups([entry("a.ts"), entry("b.ts"), entry("c.ts")]));
+
+  it("walks forwards and backwards while the file is in the list", () => {
+    expect(stepTarget(three, "b.ts", 1, 1)?.path).toBe("c.ts");
+    expect(stepTarget(three, "b.ts", 1, -1)?.path).toBe("a.ts");
+  });
+
+  it("stops at each end rather than wrapping", () => {
+    expect(stepTarget(three, "a.ts", 0, -1)).toBeNull();
+    expect(stepTarget(three, "c.ts", 2, 1)).toBeNull();
+  });
+
+  it("lands on the file that took a vanished file's slot", () => {
+    // The bug this function exists to make impossible. Showing `b.ts` at index 1,
+    // `b.ts` is committed away and `middle.ts` takes the slot. Adding the delta to
+    // the reanchored index would give `c.ts` for Next and `a.ts` for Previous,
+    // leaving `middle.ts` unreachable in either direction.
+    const after = changedFiles(groups([entry("a.ts"), entry("middle.ts"), entry("c.ts")]));
+
+    expect(stepTarget(after, "b.ts", 1, 1)?.path).toBe("middle.ts");
+    expect(stepTarget(after, "b.ts", 1, -1)?.path).toBe("a.ts");
+  });
+
+  it("treats a vanished file at the front as being before the whole list", () => {
+    const after = changedFiles(groups([entry("b.ts"), entry("c.ts")]));
+    expect(stepTarget(after, "a.ts", 0, 1)?.path).toBe("b.ts");
+    expect(stepTarget(after, "a.ts", 0, -1)).toBeNull();
+  });
+
+  it("clamps a vanished file whose slot is past the end of the shorter list", () => {
+    const after = changedFiles(groups([entry("a.ts")]));
+    expect(stepTarget(after, "gone.ts", 5, -1)).toBeNull();
+    expect(stepTarget(after, "gone.ts", 5, 1)?.path).toBe("a.ts");
+  });
+
+  it("has nowhere to go in an empty list", () => {
+    expect(stepTarget([], "a.ts", 0, 1)).toBeNull();
+    expect(stepTarget([], "a.ts", 0, -1)).toBeNull();
   });
 });
 

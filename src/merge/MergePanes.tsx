@@ -299,13 +299,11 @@ class ArrowMarker extends GutterMarker {
   override elementClass = "isabuild-arrow";
 
   override toDOM() {
-    const element = iconElement(this.icon);
-    // A `title` rather than an `aria-label`: CodeMirror marks the whole gutter
+    // A tooltip rather than an `aria-label`: CodeMirror marks the whole gutter
     // `aria-hidden`, so nothing here reaches a screen reader whatever it is
     // labelled. The toolbar's Take mine / Take theirs are the accessible route to
     // the same actions, as the change strip's marks are to the same chunks.
-    element.setAttribute("title", this.title);
-    return element;
+    return iconElement(this.icon, this.title);
   }
 }
 
@@ -584,9 +582,14 @@ export function MergePanes({ path, stages, value, onChange, busy }: MergePanesPr
        *
        * So ours goes `after`, flush against the ours/result seam, and theirs stays
        * `before` but is raised above `lineNumbers()` so it renders ahead of them
-       * rather than inside the pane. `Prec.high` is what does the raising:
-       * `activeGutters` is ordered by extension precedence, and `paneExtensions`
-       * contributes the line numbers first.
+       * rather than inside the pane. `Prec.high` is what does the raising —
+       * `activeGutters` is ordered by explicit precedence first and tree order
+       * second, and `paneExtensions` contributes an unprioritised `lineNumbers()`.
+       *
+       * Precedence rather than simply listing `arrows` before that spread, which
+       * would also work: one mechanism, stated, beats two where a reader cannot
+       * tell which is load-bearing and a tidy-up of the array order could silently
+       * remove the one that was.
        *
        * No new grid column and no absolute positioning: `.cm-gutters-after` is
        * positioned by CodeMirror's own base theme, and `lib/mergeAlign` is purely
@@ -614,9 +617,9 @@ export function MergePanes({ path, stages, value, onChange, busy }: MergePanesPr
         state: EditorState.create({
           doc,
           extensions: [
-            side === "theirs" ? Prec.high(arrows) : arrows,
             ...paneExtensions(currentAppearance()?.theme ?? DEFAULT_THEME),
             ...readOnlyExtensions(),
+            side === "theirs" ? Prec.high(arrows) : arrows,
             spacerField,
             sideDecorationField(model, side),
           ],

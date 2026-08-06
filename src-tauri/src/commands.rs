@@ -246,7 +246,7 @@ pub async fn diff_window_route(
             // across a call that can re-enter. Nothing optimistic is written here:
             // the window registers when it lands, and stays where it is if its
             // save refuses, so the record only ever describes what is on screen.
-            let _ = app.emit_to(
+            let sent = app.emit_to(
                 label.as_str(),
                 "diff://show",
                 ShowFileRequest {
@@ -255,7 +255,20 @@ pub async fn diff_window_route(
                     orig_path,
                 },
             );
-            Ok(Some(label))
+            match sent {
+                Ok(()) => Ok(Some(label)),
+                // Reporting the reuse anyway would focus a window still showing a
+                // different file, and let the user read and type into a file they
+                // did not click — the wrong-file bug this whole module exists to
+                // prevent. The realistic cause is the window having gone between
+                // the liveness check above and here, so answering `Create` is both
+                // honest and the right recovery: `getByLabel` will find nothing and
+                // the caller opens a fresh window.
+                Err(_) => {
+                    registry.remove(&label);
+                    Ok(None)
+                }
+            }
         }
         Route::Create => Ok(None),
     }

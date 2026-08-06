@@ -285,6 +285,13 @@ export function UnifiedPane({
     return () => onReady(null);
   }, [goToChange, onReady, seek]);
 
+  // Before the first paint, for the reason `SplitPanes` says: a layout reported
+  // from the construction effect below would arrive after React had already
+  // painted the incoming pane under the outgoing pane's header.
+  useLayoutEffect(() => {
+    layoutRef.current({ mode: "unified" });
+  }, []);
+
   // --- following the props --------------------------------------------------
 
   // A new commit. The original is state, not an editor, so this is an effect on a

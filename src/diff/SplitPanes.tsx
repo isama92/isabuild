@@ -271,7 +271,15 @@ export function SplitPanes({
       },
       // Restores a block from HEAD into the working file. The package positions
       // the button and owns the click; only the glyph is ours.
-      revertControls: "a-to-b",
+      //
+      // Withheld entirely for a deleted file rather than disabled, for the reason
+      // `UnifiedPane` withholds its own: the package's `revertClicked` ends in a
+      // plain `dest.dispatch({ changes })`, and `EditorState.readOnly` is a facet
+      // *commands* consult, not `dispatch`. So the insert would land, the update
+      // listener would report it, `handleRightChange` would drop it on
+      // `right === null`, and the user would watch a block reappear that is never
+      // written and is wiped by the next refresh, with no error anywhere.
+      revertControls: seed.rightEditable ? "a-to-b" : undefined,
       renderRevertControl: () => {
         const button = document.createElement("button");
         button.appendChild(iconElement("chevrons-right"));
@@ -340,6 +348,15 @@ export function SplitPanes({
     return () => onReady(null);
   }, [goToChange, onReady, seek]);
 
+  // The *shape* before the first paint, ahead of the construction effect that
+  // measures where the divider actually is. React runs layout effects before it
+  // paints and passive effects after, so reporting this only from the measure
+  // would give the header one frame describing the pane that just went — a single
+  // unified header over two panes, or two halves and a border over one document.
+  useLayoutEffect(() => {
+    layoutRef.current({ mode: "split", splitAt: null });
+  }, []);
+
   // --- following the props --------------------------------------------------
 
   // A new commit, or an external edit the window decided to adopt. Guarded by an
@@ -374,7 +391,13 @@ export function SplitPanes({
   }, [right, rightRevision]);
 
   useEffect(() => {
-    mergeRef.current?.b.dispatch(editableTransaction(rightEditable));
+    const merge = mergeRef.current;
+    if (!merge) return;
+    merge.b.dispatch(editableTransaction(rightEditable));
+    // And withdraw the revert controls with it: a watcher refresh can delete the
+    // file under an editable pane, and a control left behind would restore a block
+    // that is then silently dropped. See the construction call for why.
+    merge.reconfigure({ revertControls: rightEditable ? "a-to-b" : undefined });
   }, [rightEditable]);
 
   // Collapsing is a MergeView option rather than an extension, so it is a

@@ -45,7 +45,28 @@ export function routeDiffWindow(
   });
 }
 
-/** Subscribe to the backend asking this window to show another file. */
+/**
+ * The wire form of the event. `orig_path: Option<String>` with serde's camelCase
+ * rename serialises `None` as an explicit `null`, not as an absent key.
+ */
+interface ShowFileWire {
+  repoRoot: string;
+  path: string;
+  origPath: string | null;
+}
+
+/**
+ * Subscribe to the backend asking this window to show another file.
+ *
+ * Normalises `origPath` from `null` to absent, so what reaches the window matches
+ * `DiffParams`' optional type rather than merely being assignable to it. Nothing
+ * reads it any way but `?? null` today, and that is exactly the kind of thing that
+ * stops being true quietly: the first `!== undefined` or `?.` written against it
+ * would take the wrong branch.
+ */
 export function onShowFile(callback: (target: DiffParams) => void): Promise<UnlistenFn> {
-  return listen<DiffParams>(SHOW_FILE_EVENT, (event) => callback(event.payload));
+  return listen<ShowFileWire>(SHOW_FILE_EVENT, (event) => {
+    const { repoRoot, path, origPath } = event.payload;
+    callback(origPath === null ? { repoRoot, path } : { repoRoot, path, origPath });
+  });
 }

@@ -104,12 +104,24 @@ pub fn decide(
     wanted: &ShownFile,
     preferred: &str,
 ) -> Route {
-    if let Some(label) = shown
+    // Deterministic, because `HashMap` iteration is not and two labels *can* map to
+    // one file: stepping between files does not consult this registry, so a second
+    // window can be walked onto a file another already shows. Preferring the
+    // window whose label belongs to the file, then the lowest label, at least makes
+    // which one gets focused the same on every run — a documented gap should not
+    // also be an unreproducible one, and Rust seeds its hasher per process.
+    let mut matches: Vec<&String> = shown
         .iter()
-        .find(|(label, file)| *file == wanted && alive.contains(label.as_str()))
-        .map(|(label, _)| label.clone())
+        .filter(|(label, file)| *file == wanted && alive.contains(label.as_str()))
+        .map(|(label, _)| label)
+        .collect();
+    matches.sort_unstable();
+    if let Some(label) = matches
+        .iter()
+        .find(|label| label.as_str() == preferred)
+        .or(matches.first())
     {
-        return Route::Focus(label);
+        return Route::Focus((*label).clone());
     }
     match (alive.contains(preferred), shown.contains_key(preferred)) {
         // A window sits at this file's own label showing something else, because
@@ -184,6 +196,42 @@ mod tests {
                 "diff-b"
             ),
             Route::Focus("diff-b".into())
+        );
+    }
+
+    #[test]
+    fn picks_the_same_window_every_run_when_two_show_one_file() {
+        // Two labels can map to one file, because stepping between files does not
+        // consult this registry — a documented gap. `HashMap` iteration order is
+        // not stable and Rust seeds its hasher per process, so without an ordering
+        // rule *which* window got focused would vary between runs, making the gap
+        // unreproducible as well as present.
+        let map = shown(&[
+            ("diff-z", file("/r", "b.ts")),
+            ("diff-a", file("/r", "b.ts")),
+            ("diff-m", file("/r", "b.ts")),
+        ]);
+        let live = alive(&["diff-a", "diff-m", "diff-z"]);
+
+        assert_eq!(
+            decide(&map, &live, &file("/r", "b.ts"), "diff-none"),
+            Route::Focus("diff-a".into())
+        );
+    }
+
+    #[test]
+    fn prefers_the_window_whose_label_belongs_to_the_file() {
+        // Given the choice, the one the user associates with the file wins over the
+        // one that merely sorts first.
+        let map = shown(&[
+            ("diff-a", file("/r", "b.ts")),
+            ("diff-preferred", file("/r", "b.ts")),
+        ]);
+        let live = alive(&["diff-a", "diff-preferred"]);
+
+        assert_eq!(
+            decide(&map, &live, &file("/r", "b.ts"), "diff-preferred"),
+            Route::Focus("diff-preferred".into())
         );
     }
 
