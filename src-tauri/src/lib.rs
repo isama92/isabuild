@@ -1,6 +1,7 @@
 pub mod branch;
 mod commands;
 pub mod diff;
+pub mod diffwindows;
 pub mod files;
 pub mod fonts;
 pub mod git;
@@ -19,6 +20,7 @@ pub mod watcher;
 pub mod watchfilter;
 pub mod watchtree;
 
+use diffwindows::DiffWindows;
 use gitops::GitOps;
 use menu::MenuState;
 use project::ActiveProject;
@@ -68,6 +70,9 @@ pub fn run() {
             // welcome screen or a reopened `lastProject` fills it in, which is
             // why `git_status` and `pty_spawn` refuse to guess a directory.
             app.manage(ActiveProject::default());
+            // Which file each diff window is *currently* showing, which stops
+            // being its label the moment it loads a sibling in place.
+            app.manage(DiffWindows::default());
 
             // `app_config_dir` is derived from the bundle identifier, so this is
             // ~/.config/com.isabuild.desktop on Linux, ~/Library/Application
@@ -160,6 +165,8 @@ pub fn run() {
             commands::git_watch,
             commands::git_file_diff,
             commands::write_working_file,
+            commands::diff_window_shows,
+            commands::diff_window_route,
             commands::git_branch_state,
             commands::git_switch_branch,
             commands::git_create_branch,
@@ -190,6 +197,21 @@ pub fn run() {
             commands::recent_remove
         ])
         .on_window_event(|window, event| {
+            // `Destroyed`, not `CloseRequested`: a diff window intercepts its own
+            // close and can *refuse* it while it flushes an edit, so forgetting the
+            // record there would blank a window that then stays open — and the
+            // Status panel would open a second one beside it. No branch on the
+            // label; a window that never registered is not in the map anyway.
+            //
+            // `close_secondary_windows` needs nothing of its own: it calls
+            // `close()`, each window is then destroyed, and each destruction
+            // arrives here.
+            if let tauri::WindowEvent::Destroyed = event {
+                window
+                    .app_handle()
+                    .state::<DiffWindows>()
+                    .remove(window.label());
+            }
             // Only the main window owns the PTY sessions. Diff windows
             // (label `diff-*`, opened per file in Part 4) come and go while
             // Claude Code keeps running, so their close must not touch them.

@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { WebviewWindow } from "@tauri-apps/api/webviewWindow";
 import { diffWindowLabel, diffWindowUrl, openDiffWindow } from "./diffWindow";
+import { routeDiffWindow } from "./diffRegistry";
 import { DEFAULT_THEME } from "../theme/themes";
 
 // The constructor doubles as the creation call, so the mock records its args
@@ -31,12 +32,18 @@ vi.mock("@tauri-apps/api/webviewWindow", () => ({
   ),
 }));
 
+vi.mock("./diffRegistry", () => ({ routeDiffWindow: vi.fn() }));
+
 const getByLabelMock = vi.mocked(WebviewWindow.getByLabel);
+const routeMock = vi.mocked(routeDiffWindow);
 
 beforeEach(() => {
   created.length = 0;
   outcome = "created";
   getByLabelMock.mockResolvedValue(null);
+  // Nothing open for the file, so the caller creates one — the behaviour every
+  // pre-existing case here was written against.
+  routeMock.mockResolvedValue(null);
 });
 
 afterEach(() => {
@@ -144,5 +151,47 @@ describe("openDiffWindow", () => {
     await expect(openDiffWindow({ repoRoot: "/r", path: "src/a.ts" })).rejects.toThrow(
       /could not open the diff window: window creation denied/,
     );
+  });
+
+  it("focuses the window the backend names, even when it is not this file's label", () => {
+    // A window opened for another file has navigated to this one, so the label
+    // derived from the path belongs to nobody. Only the backend knows.
+    const setFocus = vi.fn().mockResolvedValue(undefined);
+    const unminimize = vi.fn().mockResolvedValue(undefined);
+    routeMock.mockResolvedValue("diff-somewhere-else");
+    getByLabelMock.mockResolvedValue({ setFocus, unminimize } as unknown as WebviewWindow);
+
+    return openDiffWindow({ repoRoot: "/r", path: "src/a.ts" }).then(() => {
+      expect(getByLabelMock).toHaveBeenCalledWith("diff-somewhere-else");
+      expect(setFocus).toHaveBeenCalledTimes(1);
+      expect(created).toHaveLength(0);
+    });
+  });
+
+  it("still creates under this file's own label", async () => {
+    // Only the *lookup* follows the backend. A window that has to be made is made
+    // under the name its file expects, or the next lookup would not find it.
+    routeMock.mockResolvedValue(null);
+    await openDiffWindow({ repoRoot: "/r", path: "src/a.ts" });
+    expect(created[0].label).toBe(diffWindowLabel({ repoRoot: "/r", path: "src/a.ts" }));
+  });
+
+  it("tells the backend which label the file belongs to", async () => {
+    await openDiffWindow({ repoRoot: "/r", path: "src/a.ts", origPath: "old.ts" });
+    expect(routeMock).toHaveBeenCalledWith(
+      { repoRoot: "/r", path: "src/a.ts", origPath: "old.ts" },
+      diffWindowLabel({ repoRoot: "/r", path: "src/a.ts" }),
+    );
+  });
+
+  it("still opens the file when the backend cannot answer", async () => {
+    // The registry must never be able to stop a file opening. Falling back to the
+    // label is exactly what this did before the registry existed.
+    routeMock.mockRejectedValue(new Error("ipc gone"));
+
+    await openDiffWindow({ repoRoot: "/r", path: "src/a.ts" });
+
+    expect(created).toHaveLength(1);
+    expect(getByLabelMock).toHaveBeenCalledWith(diffWindowLabel({ repoRoot: "/r", path: "src/a.ts" }));
   });
 });
