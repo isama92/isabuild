@@ -122,6 +122,37 @@ describe("useViewOptions", () => {
     // Off again, so the override is dropped rather than written as `false`.
     expect(save).toHaveBeenCalledWith({ viewOptions: {} });
   });
+
+  describe("set", () => {
+    it("writes the value it is asked for, not the opposite of what it read", () => {
+      render(<Harness />);
+      seen?.set("collapse-unchanged", true);
+      expect(save).toHaveBeenCalledWith({ viewOptions: { "collapse-unchanged": true } });
+    });
+
+    it("writes nothing when the value is already the one held", () => {
+      // Clicking the selected face of a segmented pair. A write here would be an
+      // IPC round trip and a `settings://changed` telling every other window that
+      // nothing happened.
+      useSettingsStore.setState({ settings: settings({ "collapse-unchanged": true }) });
+      render(<Harness />);
+
+      seen?.set("collapse-unchanged", true);
+
+      expect(save).not.toHaveBeenCalled();
+    });
+
+    it("swallows the click while the settings have not arrived", () => {
+      // Same guard `toggle` has, and for the same reason: a map built from `{}`
+      // would erase every override this build does not recognise.
+      useSettingsStore.setState({ settings: null });
+      render(<Harness />);
+
+      seen?.set("collapse-unchanged", true);
+
+      expect(save).not.toHaveBeenCalled();
+    });
+  });
 });
 
 describe("nextOverrides", () => {

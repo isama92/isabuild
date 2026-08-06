@@ -316,7 +316,7 @@ export function MergePanes({ path, stages, value, onChange, busy }: MergePanesPr
   const [currentChunk, setCurrentChunk] = useState<number | null>(null);
   const [stripes, setStripes] = useState<readonly Stripe[]>([]);
   const [theme, setTheme] = useState(() => currentAppearance()?.theme ?? DEFAULT_THEME);
-  const { state: viewOptions, toggle: toggleViewOption } = useViewOptions();
+  const { state: viewOptions, set: setViewOption } = useViewOptions();
 
   // Values that only seed the editors, and callbacks their own listeners reach
   // for, read through refs so they are not effect dependencies that would tear an
@@ -793,7 +793,7 @@ export function MergePanes({ path, stages, value, onChange, busy }: MergePanesPr
           onSelect: () => applyToCurrent(side),
         })),
       },
-      ...viewOptionItems("merge", viewOptions, toggleViewOption, busy),
+      ...viewOptionItems("merge", viewOptions, setViewOption, { disabled: busy }),
     ],
     [
       actions,
@@ -804,7 +804,7 @@ export function MergePanes({ path, stages, value, onChange, busy }: MergePanesPr
       currentChunk,
       goToConflict,
       remaining,
-      toggleViewOption,
+      setViewOption,
       viewOptions,
     ],
   );

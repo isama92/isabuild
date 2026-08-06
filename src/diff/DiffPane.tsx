@@ -48,6 +48,7 @@ import {
   themeTransaction,
 } from "../editor/codemirror";
 import { EditorToolbar, type ToolbarItem } from "../editor/EditorToolbar";
+import { Icons } from "../editor/icons";
 import { OverviewRuler } from "../editor/OverviewRuler";
 import { useViewOptions } from "../editor/useViewOptions";
 import { viewOptionItems } from "../editor/viewOptions";
@@ -130,7 +131,7 @@ export function DiffPane({
   /** Where to draw the drag handle, in pixels from the host's left edge. */
   const [sashX, setSashX] = useState<number | null>(null);
   const [theme, setTheme] = useState(() => currentAppearance()?.theme ?? DEFAULT_THEME);
-  const { state: options, toggle } = useViewOptions();
+  const { state: options, set: setOption } = useViewOptions();
   const collapse = options["collapse-unchanged"] ?? false;
 
   // Values that only seed the editors, and callbacks their own listeners reach
@@ -481,21 +482,25 @@ export function DiffPane({
           {
             kind: "button",
             id: "previous-change",
-            label: "◂ Previous",
+            label: "Previous change",
             tooltip: "Go to the previous change",
+            icon: Icons.previousChange,
             disabled: changeCount === 0,
             onSelect: () => goToChange("previous"),
           },
           {
             kind: "button",
             id: "next-change",
-            label: "Next ▸",
+            label: "Next change",
             tooltip: "Go to the next change",
+            icon: Icons.nextChange,
             disabled: changeCount === 0,
             onSelect: () => goToChange("next"),
           },
         ],
       },
+      { kind: "separator", id: "after-navigate" },
+      ...viewOptionItems("diff", options, setOption),
       { kind: "spacer", id: "gap" },
       {
         kind: "status",
@@ -505,9 +510,8 @@ export function DiffPane({
             ? "No changes in this file"
             : `${changeCount} ${changeCount === 1 ? "change" : "changes"}`,
       },
-      ...viewOptionItems("diff", options, toggle),
     ],
-    [changeCount, goToChange, options, toggle],
+    [changeCount, goToChange, options, setOption],
   );
 
   return (

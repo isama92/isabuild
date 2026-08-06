@@ -299,8 +299,8 @@ describe("the toolbar", () => {
 
   it("offers change navigation", () => {
     render(<DiffPane {...props()} />);
-    expect(screen.getByRole("button", { name: "◂ Previous" })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Next ▸" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Previous change" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Next change" })).toBeInTheDocument();
   });
 
   it("counts the changes even in a pane nothing has measured", async () => {
@@ -318,13 +318,13 @@ describe("the toolbar", () => {
       expect(container.querySelectorAll(".ew-ruler-mark")).toHaveLength(0);
     });
     expect(screen.getByText("1 change")).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Next ▸" })).toBeEnabled();
+    expect(screen.getByRole("button", { name: "Next change" })).toBeEnabled();
   });
 
   it("says so when there is nothing to navigate", () => {
     render(<DiffPane {...props({ left: "one\nTWO\nthree\n" })} />);
     expect(screen.getByText("No changes in this file")).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Next ▸" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Next change" })).toBeDisabled();
   });
 
   it("names itself, so it is not just some buttons", () => {
@@ -339,7 +339,7 @@ describe("the toolbar", () => {
       view.dispatch({ selection: { anchor: 0 } });
     });
 
-    act(() => screen.getByRole("button", { name: "Next ▸" }).click());
+    act(() => screen.getByRole("button", { name: "Next change" }).click());
 
     // Line 2 is the one that differs.
     expect(view.state.doc.lineAt(view.state.selection.main.head).number).toBe(2);
