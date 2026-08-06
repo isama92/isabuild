@@ -6,6 +6,7 @@ import { useGitStore } from "../store/gitStore";
 import { useLayoutStore } from "../store/layoutStore";
 import { conflictHasMarkers, type ChangeStatus, type ConflictEntry, type FileEntry } from "../lib/gitStatus";
 import { conflictActions, conflictLabel } from "../lib/conflictView";
+import { isStagedAndModified } from "../lib/changedFiles";
 import {
   changeLabel,
   conflictTooltip,
@@ -389,12 +390,16 @@ export function StatusPanel() {
     }
   }
 
-  /** Whether this path is in both groups, i.e. staged and then changed again. */
+  /**
+   * Whether this path is in both groups, i.e. staged and then changed again.
+   *
+   * Shared with `lib/changedFiles`, which dedupes the diff window's file list on
+   * the same fact. Only the predicate is shared: this panel renders such a path as
+   * two rows on purpose — they say different things and offer different actions —
+   * while the diff window shows one diff for it either way.
+   */
   function isAlsoModified(target: FileTarget): boolean {
-    return (
-      staged.some((entry) => entry.path === target.path) &&
-      unstaged.some((entry) => entry.path === target.path)
-    );
+    return isStagedAndModified({ staged, unstaged }, target.path);
   }
 
   function onMenu(target: FileTarget, at: { x: number; y: number }) {
