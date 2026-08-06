@@ -14,12 +14,17 @@
 //   is enough to assert that the marks are wired to the chunks and to the theme. The
 //   arithmetic itself is `lib/diffStripes`' own test, against an injected geometry,
 //   and the strip's rendering is `editor/OverviewRuler.test`.
-// - **A `»` cannot be clicked.** @codemirror/merge places the revert buttons from
-//   measured chunk positions, so under jsdom the column is there and empty. That
-//   the control is configured is asserted; clicking one is a manual check, exactly
-//   as MergePanes.test says of its gutter arrows.
+// - **A revert control cannot be clicked.** @codemirror/merge places those buttons
+//   from measured chunk positions, so under jsdom the column is there and empty.
+//   That the control is configured is asserted; clicking one is a manual check,
+//   exactly as MergePanes.test says of its gutter arrows. The chevron it is drawn
+//   with is `editor/iconElement`'s own test.
 // - **The panes' alignment cannot be asserted**, for the same reason: spacer
 //   heights are measured.
+// - **The divider's remembered position cannot be asserted.** A drag divides
+//   pointer coordinates by the host's width, and in jsdom both are zero, so the
+//   fraction a real drag would produce is NaN here. That the fraction survives a
+//   remount is a manual check.
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, render, screen, waitFor } from "@testing-library/react";
@@ -60,7 +65,7 @@ function props(overrides: Partial<DiffPaneProps> = {}): DiffPaneProps {
     path: "src/a.ts",
     rightEditable: true,
     onRightChange: vi.fn(),
-    onSplitAt: vi.fn(),
+    onLayout: vi.fn(),
     ...overrides,
   };
 }
@@ -348,9 +353,9 @@ describe("the toolbar", () => {
 
 describe("the revert control", () => {
   it("is configured to restore from HEAD into the working file", () => {
-    // Part 4's `»`. The column exists as soon as the MergeView does; the buttons
-    // inside it are placed from measured chunk positions, so jsdom has none —
-    // clicking one is a manual check.
+    // The column exists as soon as the MergeView does; the buttons inside it are
+    // placed from measured chunk positions, so jsdom has none — clicking one is a
+    // manual check.
     const { container } = render(<DiffPane {...props()} />);
     expect(container.querySelector(".cm-merge-revert")).toBeInTheDocument();
   });
@@ -358,11 +363,13 @@ describe("the revert control", () => {
 
 describe("the divider", () => {
   it("reports where it sits so the headers can line up with the panes", () => {
-    const onSplitAt = vi.fn();
-    render(<DiffPane {...props({ onSplitAt })} />);
-    // jsdom measures every box as zero, so the value is not the point; being told
-    // at all is, because the header has no other way to find the split.
-    expect(onSplitAt).toHaveBeenCalled();
+    const onLayout = vi.fn();
+    render(<DiffPane {...props({ onLayout })} />);
+    // jsdom measures every box as zero, so the number is not the point; the shape
+    // is, because the header has no other way to know how to divide itself.
+    expect(onLayout).toHaveBeenCalledWith(
+      expect.objectContaining({ mode: "split", splitAt: expect.any(Number) }),
+    );
   });
 
   it("offers a handle to drag", () => {

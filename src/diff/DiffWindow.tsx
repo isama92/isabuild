@@ -15,6 +15,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { DiffPane } from "./DiffPane";
+import type { DiffHeaderLayout } from "./diffView";
 import { EditorWindow, type Notice } from "../editor/EditorWindow";
 import { useEditorWindow, type WindowTarget } from "../editor/useEditorWindow";
 import { shouldAdoptDiskContent } from "../lib/diffSync";
@@ -36,7 +37,14 @@ export function DiffWindow() {
   const [error, setError] = useState<string | null>(null);
   const [saveError, setSaveError] = useState<string | null>(null);
   const [imprecise, setImprecise] = useState(false);
-  const [splitAt, setSplitAt] = useState<number | null>(null);
+  /**
+   * How to divide the header, as the pane below reports it.
+   *
+   * A discriminant rather than a nullable number: "not measured yet" and "there is
+   * no divider" are different answers, and a header that treated them the same
+   * would lay a one-document view out as two halves for its first frame.
+   */
+  const [layout, setLayout] = useState<DiffHeaderLayout>({ mode: "split", splitAt: null });
   /**
    * Bumped every time we adopt disk content. `diff.right` alone cannot drive
    * the pane: while a buffer is kept it stays frozen at an older value, so an
@@ -263,7 +271,11 @@ export function DiffWindow() {
         <>
           <div
             className="diff-header-side"
-            style={splitAt === null ? undefined : { flex: `0 0 ${splitAt}px` }}
+            style={
+              layout.mode === "split" && layout.splitAt !== null
+                ? { flex: `0 0 ${layout.splitAt}px` }
+                : undefined
+            }
           >
             <span className="diff-sha">{leftSha}</span>
             <span className="diff-header-path">{isNewFile ? "(new file)" : leftPath}</span>
@@ -287,7 +299,7 @@ export function DiffWindow() {
           path={diff.path}
           rightEditable={!isDeleted}
           onRightChange={handleRightChange}
-          onSplitAt={setSplitAt}
+          onLayout={setLayout}
           onImprecise={setImprecise}
         />
       )}
