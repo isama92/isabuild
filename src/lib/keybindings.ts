@@ -112,6 +112,34 @@ export const ACTIONS: readonly KeyAction[] = [
     scopes: ["diff"],
     defaultAccelerator: "Alt+ArrowUp",
   },
+  // Paging through the list, deliberately not Alt+Arrow.
+  //
+  // Alt+ArrowLeft/Right looks like the obvious horizontal partner to the pair
+  // above, and it cannot be used: it is the word-motion gesture in a text editor
+  // on every platform, and `defaultKeymap` binds it twice over. `Alt-ArrowLeft`
+  // is `cursorSyntaxLeft` on Linux and Windows, and the *same chord* is
+  // `cursorGroupLeft` on macOS through the `mac` alias of `Mod-ArrowLeft`, that
+  // one with `preventDefault: true`. Claiming it in `CLAIMED_BY_THE_APP` would
+  // therefore drop six bindings rather than two, costing Ctrl+Arrow word motion
+  // on Linux and Windows and Alt+Arrow word motion on macOS — inside an editable
+  // pane, and in an app whose previous part was entirely about word motion.
+  //
+  // Alt+PageUp/PageDown is free in `defaultKeymap` on all three platforms, is not
+  // an OS gesture on any of them, and keeps Alt as this window's navigation
+  // modifier. `codemirror.test` derives its collision check from this registry, so
+  // a future accelerator that repeats the mistake fails there.
+  {
+    id: "next-file",
+    label: "Next changed file",
+    scopes: ["diff"],
+    defaultAccelerator: "Alt+PageDown",
+  },
+  {
+    id: "previous-file",
+    label: "Previous changed file",
+    scopes: ["diff"],
+    defaultAccelerator: "Alt+PageUp",
+  },
   {
     id: "next-conflict",
     label: "Next conflict",

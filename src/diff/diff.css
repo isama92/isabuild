@@ -24,6 +24,17 @@
   border-left: 1px solid var(--ib-border);
 }
 
+/* The one-pane view has one document, so one header and no divider to track. No
+   `flex-basis` and no left border: there is nothing beside it to separate from. */
+.diff-header-side--unified {
+  flex: 1 1 auto;
+}
+
+.diff-header-arrow {
+  flex: 0 0 auto;
+  color: var(--ib-text-dim);
+}
+
 .diff-sha {
   flex: 0 0 auto;
   font-family: "JetBrains Mono", "Fira Code", Menlo, Consolas, monospace;
@@ -80,8 +91,12 @@
   height: 100%;
 }
 
+/* The one-pane view is a plain editor rather than a MergeView, so it is its own
+   scroller and takes `height: 100%` from editor/codemirror's theme. The rule above
+   is `.cm-mergeView`-scoped and simply does not apply to it. */
+
 /* Sits on the seam between the left pane and the revert column, so a drag never
-   starts on a `»`. Two pixels of visible line, six of grab area. */
+   starts on a revert control. Two pixels of visible line, six of grab area. */
 .diff-sash {
   position: absolute;
   top: 0;

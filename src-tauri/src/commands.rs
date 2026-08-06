@@ -9,6 +9,7 @@ use tauri::{AppHandle, Emitter, Manager as _, State};
 
 use crate::branch::{self, BranchState, DirtyPolicy, SwitchOutcome, SwitchTarget};
 use crate::diff::{self, Eol, FileDiff};
+use crate::diffwindows::{DiffWindows, Route, ShownFile};
 use crate::files::{self, CommitOutcome};
 use crate::fonts::{self, FontFamily};
 use crate::git::{self, GitError, GitStatus};
@@ -197,6 +198,89 @@ pub async fn git_file_diff(
     .await
     .map_err(|e| format!("diff task failed: {e}"))?
     .map_err(|e| e.to_string())
+}
+
+/// Record which file this diff window is currently showing.
+///
+/// Takes the `WebviewWindow` rather than a label argument, deliberately: a window
+/// can then only ever register *itself*, so a bug in one cannot make the Status
+/// panel focus another. Called on mount as well as on every navigation, so a
+/// reload — which returns a window to the file named in its URL — corrects the
+/// record rather than leaving it describing where the window used to be.
+#[tauri::command]
+pub async fn diff_window_shows(
+    window: tauri::WebviewWindow,
+    registry: State<'_, DiffWindows>,
+    repo_root: String,
+    path: String,
+) -> Result<(), String> {
+    registry.set(window.label().to_string(), ShownFile { repo_root, path });
+    Ok(())
+}
+
+/// Decide where the diff for `path` should go, and set a reuse in motion.
+///
+/// Returns the label to focus, or `None` when a window has to be created — that
+/// is a webview API, and the label, URL, title and size are the frontend's
+/// business. See [`crate::diffwindows`] for why this cannot be answered there.
+#[tauri::command]
+pub async fn diff_window_route(
+    app: AppHandle,
+    registry: State<'_, DiffWindows>,
+    repo_root: String,
+    path: String,
+    orig_path: Option<String>,
+    preferred_label: String,
+) -> Result<Option<String>, String> {
+    // Checked against the windows that exist, so a record left behind by a webview
+    // that died without firing `Destroyed` can never hand back a dead label.
+    let alive = app.webview_windows().into_keys().collect();
+    let wanted = ShownFile {
+        repo_root: repo_root.clone(),
+        path: path.clone(),
+    };
+    match registry.route(&alive, &wanted, &preferred_label) {
+        Route::Focus(label) => Ok(Some(label)),
+        Route::Reuse(label) => {
+            // Emitted with the registry lock already released — never hold a mutex
+            // across a call that can re-enter. Nothing optimistic is written here:
+            // the window registers when it lands, and stays where it is if its
+            // save refuses, so the record only ever describes what is on screen.
+            let sent = app.emit_to(
+                label.as_str(),
+                "diff://show",
+                ShowFileRequest {
+                    repo_root,
+                    path,
+                    orig_path,
+                },
+            );
+            match sent {
+                Ok(()) => Ok(Some(label)),
+                // Reporting the reuse anyway would focus a window still showing a
+                // different file, and let the user read and type into a file they
+                // did not click — the wrong-file bug this whole module exists to
+                // prevent. The realistic cause is the window having gone between
+                // the liveness check above and here, so answering `Create` is both
+                // honest and the right recovery: `getByLabel` will find nothing and
+                // the caller opens a fresh window.
+                Err(_) => {
+                    registry.remove(&label);
+                    Ok(None)
+                }
+            }
+        }
+        Route::Create => Ok(None),
+    }
+}
+
+/// Payload of `diff://show`: load this file in place.
+#[derive(Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ShowFileRequest {
+    repo_root: String,
+    path: String,
+    orig_path: Option<String>,
 }
 
 /// Write the diff window's edited buffer back to the working-tree file. The

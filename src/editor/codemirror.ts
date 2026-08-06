@@ -113,14 +113,25 @@ function themeFor(theme: Theme): Extension {
         backgroundColor: t.chunkConflict,
         fontStyle: "italic",
       },
-      // The chunk gutter: an arrow per actionable chunk.
+      // The chunk gutter: an arrow per actionable chunk, on the seam between the
+      // side it takes from and the result. `display: flex` rather than
+      // `text-align`, because the marker is an `<svg>` now rather than a glyph.
       ".cm-gutterElement.isabuild-arrow": {
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
         cursor: "pointer",
         color: t.textDim,
-        textAlign: "center",
         width: "16px",
       },
       ".cm-gutterElement.isabuild-arrow:hover": { color: t.textBright },
+      ".cm-gutterElement.isabuild-arrow svg": { width: "14px", height: "14px" },
+      // The arrow column sits against the pane's edge with nothing between it and
+      // the next pane, so it needs the seam drawn. `.cm-gutter`, singular: the
+      // `class` given to `gutter()` lands on the individual column, while
+      // `.cm-gutters` is the container holding all of them — a selector joining
+      // the two can never match anything.
+      ".cm-gutter.isabuild-arrow-gutter": { borderLeft: `1px solid ${t.border}` },
 
       // --- @codemirror/merge's own classes, retinted from the registry -------
       //
@@ -152,10 +163,58 @@ function themeFor(theme: Theme): Extension {
         borderTop: `1px solid ${t.border}`,
         borderBottom: `1px solid ${t.border}`,
       },
-      // The revert control is deliberately *not* styled here: `.cm-merge-revert`
-      // is a sibling of the two editors rather than a part of either, so an
-      // `EditorView.theme` rule — which compiles scoped to an editor root — could
-      // never match it. It lives in editorWindow.css.
+      // The revert control of the *two-pane* view is deliberately not styled here:
+      // `.cm-merge-revert` is a sibling of the two editors rather than a part of
+      // either, so an `EditorView.theme` rule — which compiles scoped to an editor
+      // root — could never match it. It lives in editorWindow.css.
+
+      // --- the one-pane view's deleted lines ---------------------------------
+      //
+      // These *are* inside the editor root, so unlike `.cm-merge-revert` a scoped
+      // rule reaches them. All of them are hardcoded in the package's base theme
+      // (a brown, a red and a green picked for a white page), and all of them are
+      // overridden. `.cm-deletedChunk` is the block standing in for what HEAD had,
+      // so it carries the same tint the left pane's changed lines do.
+      ".cm-deletedChunk": {
+        backgroundColor: t.diffDeletedBg,
+        color: t.text,
+        paddingLeft: "6px",
+      },
+      ".cm-deletedChunk .cm-deletedText": {
+        // The package draws a 2px underline gradient here, which is all but
+        // invisible at 12px. A background, matching the two-pane view's
+        // `.cm-changedText`.
+        background: t.diffChangedText,
+      },
+      // `del` for the deleted lines is the package's markup, not a decision the
+      // theme should honour: a whole block already reads as removed, and a struck
+      // -through code block is unreadable.
+      ".cm-deletedLine, .cm-deletedLine del": { textDecoration: "none" },
+      // The restore-from-HEAD control, one per changed block. The package
+      // positions it; the colours are ours, and match the two-pane view's.
+      ".cm-deletedChunk .cm-chunkButtons button": {
+        border: "none",
+        borderRadius: "2px",
+        background: "none",
+        color: t.textDim,
+        cursor: "pointer",
+        lineHeight: 1,
+        padding: 0,
+        margin: "0 2px",
+      },
+      ".cm-deletedChunk .cm-chunkButtons button:hover": { color: t.textBright },
+      // `iconElement` deliberately ships no `width`/`height`, so every call site
+      // has to size its own — and an unsized outermost `<svg>` does not shrink to
+      // nothing, it falls back to the default object size. Without this the
+      // chevron would be enormous.
+      ".cm-deletedChunk .cm-chunkButtons button svg": {
+        display: "block",
+        width: "14px",
+        height: "14px",
+      },
+      // Only reachable with `allowInlineDiffs`, which is off — but the package's
+      // green would survive a later decision to turn it on, so it is retinted now.
+      ".cm-inlineChangedLine": { backgroundColor: t.diffInsertedBg },
 
       // --- the find panel ----------------------------------------------------
       ".cm-panels": { backgroundColor: t.bgChrome, color: t.text },

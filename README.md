@@ -184,12 +184,106 @@ Each part is an independent piece of work, executed in order, and its entry belo
       recognised on sight rather than filed as a regression: run `claude` in the bottom terminal
       and confirm Shift+Enter submits there while the main pane still extends the prompt, and
       that Ctrl+Backspace is likewise inert in that hand-launched session.
+- [ ] diff window toolbar, file navigation and unified view. The toolbar is text buttons
+      (`◂ Previous`, `Next ▸`, `Compact`) with the change count stranded in the middle, and it
+      offers only two of the four things a diff toolbar is for. This part makes it a row of icon
+      buttons — previous/next change, previous/next **file** with a `10 / 26 files` counter,
+      Compact — with the count and a Split/Unified pair pushed right. Three of those are new
+      capability, not restyling, and each one runs into something structural.
+      **File navigation** is the largest. A diff window knows exactly one file for its whole life:
+      `useEditorWindow` parses the URL once in a `useState` initialiser, and the window's Tauri
+      label is a hash of that path, which is what stops a second window opening for the same file.
+      So the hook gains an opt-in `navigable` (an overload, so the merge window cannot have it —
+      its result buffer lives in memory until every conflict is decided, and "load something else
+      in place" has no safe meaning there), and a navigated window's label stops describing its
+      content. That is closed by a registry in Rust, `src-tauri/src/diffwindows.rs`, recording what
+      each window currently shows: its `decide()` is a pure function returning Focus, Reuse or
+      Create, and **Reuse is the case that matters** — without it, clicking `b.ts` in the Status
+      panel focuses the window that was opened for `b.ts` and has since navigated to `a.ts`, which
+      is a wrong-file bug rather than a duplicate-window one. The list itself is
+      `src/lib/changedFiles.ts`, staged then unstaged in git's own order, deduped by path (a file
+      staged and then changed again is two rows in the panel deliberately, but one diff), conflicts
+      excluded because they open the merge window. The window fetches it itself on every
+      `repo://changed`; `StatusPanel` adopts only the shared predicate, not the list, because its
+      two groups render a shared path as two rows on purpose.
+      The one thing here that is not obvious and would be a silent data loss: `writeBuffer` reads
+      the buffer when it *runs*, not when it was asked, which is right while a window stays on one
+      file and catastrophic the moment it does not — a write queued behind a slow one would read
+      the **new** file's buffer and write it into the **old** file. Hence `generationRef`, captured
+      at request time; a superseded write returns success rather than failure, because it has
+      nothing left to do and must not raise a save error or block a close. `DiffPane` is remounted
+      on `key={path}`, because otherwise the undo history survives across files and Ctrl+Z in the
+      new file would undo into the previous one's text and auto-save it, and language extensions,
+      appended with `StateEffect.appendConfig` and never removed, would stack forever. The file
+      controls render from `DiffWindow` through a new `toolbar` slot on `EditorWindow`, not from
+      the pane: the pane is unmounted during every load and for a binary file, so a counter there
+      would vanish exactly when it is being used.
+      **The unified view** is a different CodeMirror object — `unifiedMergeView` is an extension on
+      a single `EditorView`, not a `MergeView` — so `DiffPane` becomes a shell over `SplitPanes`
+      and `UnifiedPane` sharing `diff/diffView.ts`, and `onSplitAt` becomes `onLayout`, since a
+      one-document view has no divider for the header to track. Four things about the package had
+      to be checked rather than assumed, and all four bite: a compartment reconfigure
+      **re-initialises `originalDoc`**, so every Compact toggle must pass the current HEAD or it
+      rewrites what HEAD said; `rejectChunk` dispatches straight past `EditorState.readOnly`, so a
+      deleted file gets no control at all; `mergeControls: true` renders an Accept face that edits
+      the in-memory HEAD, which is a lie against a git blob, so only the reject face is rendered;
+      and a new commit must arrive as `originalDocChangeEffect`, which fires no `docChanged` and
+      therefore cannot be mistaken for an edit. What did *not* need changing is the change map:
+      a deletion widget is a zero-length block widget at `fromB` and CodeMirror joins it into that
+      line's block, so `lineBlockAt(chunk.fromB).top` already lands on the deleted lines and
+      `lib/diffStripes` works unaltered in both modes.
+      **The revert arrows.** The diff window's `»` becomes a chevron icon. The merge window's `»`
+      and `«` become icons too, and move: both are CodeMirror gutters, and a gutter defaults to its
+      own pane's *left* edge, so the ours `»` sits at the far left of the whole window pointing
+      right at a pane three columns away, and the theirs `«` sits behind its own line numbers.
+      `gutter({ side: "after" })` puts the ours arrow on the ours/result seam and raising the
+      theirs gutter above `lineNumbers()` puts its arrow on the result/theirs seam. `lib/mergeAlign`
+      is purely vertical, so the alignment cannot be affected.
+      **Not Alt+Arrow for the file pair**, which is the obvious horizontal partner to Alt+↑/↓ and
+      cannot be used: `defaultKeymap` binds it twice over, as `cursorSyntax*` on Linux and Windows
+      and as `cursorGroup*` on macOS through a `mac` alias carrying `preventDefault: true`. So on
+      macOS the window's binding could never fire at all, and claiming the chord in
+      `CLAIMED_BY_THE_APP` would drop six bindings rather than two — costing Ctrl+Arrow word motion
+      on Linux and Windows and Alt+Arrow word motion on macOS, inside an editable pane, in an app
+      whose previous part was entirely about word motion. Alt+PageUp/PageDown is free everywhere.
+      `codemirror.test` now derives its collision check from the keybinding registry, so the next
+      accelerator that repeats this fails there rather than in someone's hands.
+      Icons are `lucide-react`, the app's first UI dependency. `ToolbarButton.label` stays the
+      accessible name when an `icon` is given, so every existing `getByRole("button", { name })`
+      keeps working. `renderRevertControl` and `GutterMarker.toDOM()` need real DOM nodes rather
+      than React, so `editor/iconElement.ts` builds those two chevrons with `createElementNS`, with
+      a test pinning its path data against the real lucide component so the two cannot drift.
+      Acceptance: the toolbar reads as the mockup and every icon button has a tooltip; ↑/↓ and
+      Alt+↑/Alt+↓ walk changes, ←/→ and Alt+PageUp/PageDown walk files with the counter tracking and both
+      disabling at the ends; typing in a file and pressing Next File writes the edit to the file
+      being *left*; navigating away from a file and then clicking it in the Status panel returns
+      the *same* window to it rather than opening a second; switching Split/Unified keeps an
+      unsaved edit and the cursor, and the choice survives a restart; the unified view's chevron
+      restores a block from HEAD and Compact works there; in the merge window each chevron sits on
+      the seam between the pane it takes from and the result, and the three panes stay aligned when
+      scrolled; and the native window title follows the file in the taskbar.
+      **Outstanding, and a decision rather than a bug to fix:** stepping between files does not
+      consult the registry, only opening from the Status panel does. So with two diff windows
+      open, Alt+Right in one of them can land it on the file the other is showing — the two-editors
+      -on-one-path state the registry exists to prevent, reached by the front door. It is not
+      destructive (they converge through `shouldAdoptDiskContent` unless both are being typed in at
+      once) and it takes two open windows to reach, but closing it means picking between skipping
+      that file, focusing the other window, and allowing it, and those are three different products.
+      Accepted costs, none of which are worth coding around: Ctrl+F cannot reach the HEAD side in
+      unified mode, because there is no second editor to focus — Split stays the default; the undo
+      history and the find query are lost when the view mode changes, because the editor is rebuilt;
+      one extra `git status` runs per open diff window per debounced watcher event; and reloading a
+      diff window returns it to the file it was opened with, because `history.replaceState` throws
+      `SecurityError` on the `tauri://` scheme on Linux and macOS while working in dev and in
+      vitest, which is the worst failure shape available and not worth having.
 - [ ] auto update
 - [ ] help menu with `check for update` and `about` pages
 - [ ] view menu with theme selector and zoom
 - [ ] have files opening in place of claude code instead of opening in a new window (it should be faster)
-- [ ] more code-window view settings (the diff window has a Compact toggle; the registry is
-      `src/editor/viewOptions.ts`, so each new setting is an entry there plus a handler)
+- [ ] more code-window view settings (the diff window has Compact and a Split/Unified pair; the
+      registry is `src/editor/viewOptions.ts`, so each new setting is an entry there plus a
+      handler in the pane. An entry can pick which toolbar cluster it joins and whether it renders
+      as one toggle or as a mutually exclusive pair)
 - [ ] a shortcut to move focus between the regions (Claude Code, the bottom terminal, the Status
       panel). **Not** Ctrl+Arrow, which this list used to say: that is now word motion in the
       terminals, and it could never have worked on all three platforms anyway, since macOS gives

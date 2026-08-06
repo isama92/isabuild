@@ -94,4 +94,134 @@ describe("EditorToolbar", () => {
     expect(screen.getByText("Chunk 2 of 7 — both sides changed this")).toBeInTheDocument();
     expect(screen.queryByRole("button")).toBeNull();
   });
+
+  describe("icons", () => {
+    // The guarantee the whole icon API rests on: giving a button an icon must not
+    // change what finds it. Every existing query in the merge and diff suites is
+    // `getByRole("button", { name })`, and they are not rewritten when a label
+    // stops being visible.
+    it("keeps the label as the accessible name when the button is an icon", () => {
+      render(
+        <EditorToolbar
+          label="Actions"
+          items={[button({ label: "Next change", icon: <svg data-testid="glyph" /> })]}
+        />,
+      );
+
+      const control = screen.getByRole("button", { name: "Next change" });
+      expect(control).toHaveTextContent("");
+      expect(control).toHaveClass("ew-button--icon");
+      expect(screen.getByTestId("glyph")).toBeInTheDocument();
+    });
+
+    it("hides the icon from assistive tech, so the name is not said twice", () => {
+      render(
+        <EditorToolbar
+          label="Actions"
+          items={[button({ label: "Next change", icon: <svg data-testid="glyph" /> })]}
+        />,
+      );
+
+      expect(screen.getByTestId("glyph").parentElement).toHaveAttribute("aria-hidden", "true");
+    });
+
+    it("leaves aria-label off a text button, whose text is already its name", () => {
+      render(<EditorToolbar items={[button()]} label="Actions" />);
+      expect(screen.getByRole("button", { name: "Take mine" })).not.toHaveAttribute("aria-label");
+    });
+
+    it("still reports a toggle's state when it is an icon", () => {
+      render(
+        <EditorToolbar
+          label="Actions"
+          items={[
+            {
+              kind: "toggle",
+              id: "collapse-unchanged",
+              label: "Compact",
+              tooltip: "Hide unchanged lines",
+              icon: <svg />,
+              active: true,
+              onSelect: vi.fn(),
+            },
+          ]}
+        />,
+      );
+
+      expect(screen.getByRole("button", { name: "Compact", pressed: true })).toHaveClass(
+        "ew-button--active",
+      );
+    });
+  });
+
+  describe("layout items", () => {
+    it("joins a segmented group into one control", () => {
+      const { container } = render(
+        <EditorToolbar
+          label="Actions"
+          items={[
+            {
+              kind: "group",
+              id: "view-mode",
+              variant: "segmented",
+              items: [button({ id: "split" }), button({ id: "unified", label: "Unified" })],
+            },
+          ]}
+        />,
+      );
+
+      expect(container.querySelector(".ew-toolbar-group--segmented")).not.toBeNull();
+    });
+
+    it("leaves an ordinary group unjoined", () => {
+      const { container } = render(
+        <EditorToolbar
+          label="Actions"
+          items={[{ kind: "group", id: "navigate", items: [button()] }]}
+        />,
+      );
+
+      const group = container.querySelector(".ew-toolbar-group");
+      expect(group).not.toBeNull();
+      expect(group).not.toHaveClass("ew-toolbar-group--segmented");
+    });
+
+    it("renders a spacer that is not a control", () => {
+      const { container } = render(
+        <EditorToolbar label="Actions" items={[{ kind: "spacer", id: "gap" }]} />,
+      );
+
+      expect(container.querySelector(".ew-toolbar-spacer")).not.toBeNull();
+      expect(screen.queryByRole("button")).toBeNull();
+    });
+
+    it("renders a separator as one, so a cluster boundary is not colour-only", () => {
+      render(<EditorToolbar label="Actions" items={[{ kind: "separator", id: "rule" }]} />);
+      expect(screen.getByRole("separator")).toHaveAttribute("aria-orientation", "vertical");
+    });
+
+    it("keeps every item in the order it was given", () => {
+      const { container } = render(
+        <EditorToolbar
+          label="Actions"
+          items={[
+            { kind: "group", id: "navigate", items: [button({ id: "a", label: "A" })] },
+            { kind: "separator", id: "rule" },
+            { kind: "spacer", id: "gap" },
+            { kind: "status", id: "count", text: "6 changes" },
+          ]}
+        />,
+      );
+
+      const classes = Array.from(container.querySelectorAll(".ew-toolbar > *")).map(
+        (element) => element.className,
+      );
+      expect(classes).toEqual([
+        "ew-toolbar-group",
+        "ew-toolbar-separator",
+        "ew-toolbar-spacer",
+        "ew-toolbar-status",
+      ]);
+    });
+  });
 });

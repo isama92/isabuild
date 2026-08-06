@@ -94,13 +94,27 @@ body {
   gap: 6px;
 }
 
-/* Takes the slack between groups, so whatever follows stays pinned right. */
+/* Shrinks and ellipsises, but does not grow: a `spacer` takes the slack, so the
+   count can sit beside the controls on the right rather than being pushed to
+   wherever the text happens to end. */
 .ew-toolbar-status {
-  flex: 1 1 auto;
+  flex: 0 1 auto;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
   color: var(--ib-text-muted);
+}
+
+/* Takes the slack, so whatever follows stays pinned right. */
+.ew-toolbar-spacer {
+  flex: 1 1 auto;
+}
+
+.ew-toolbar-separator {
+  flex: 0 0 auto;
+  width: 1px;
+  height: 16px;
+  background: var(--ib-border);
 }
 
 .ew-button {
@@ -123,6 +137,26 @@ body {
   cursor: default;
 }
 
+/* An icon button: square, and flat until it is hovered. The border is kept at
+   `transparent` rather than removed so it occupies the same box as a text
+   button — a toolbar mixing the two must not have them sit at different heights. */
+.ew-button--icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border-color: transparent;
+  background: none;
+  color: var(--ib-text-muted);
+}
+
+.ew-button--icon:hover:not(:disabled) {
+  background: var(--ib-bg-button-hover);
+  color: var(--ib-text-bright);
+}
+
 /* A toggle that is on. Bordered as well as filled: `aria-pressed` carries the
    state for a screen reader, and a border carries it for anyone who cannot pick
    the fill out from the resting one. */
@@ -130,6 +164,37 @@ body {
   border-color: var(--ib-focus);
   background: var(--ib-bg-button-active);
   color: var(--ib-text-bright);
+}
+
+/* One control out of several buttons: no gap, borders overlapped by a negative
+   margin rather than removed, so the active button keeps a whole border of its
+   own instead of losing the edge it shares with its neighbour. */
+.ew-toolbar-group--segmented {
+  gap: 0;
+}
+
+.ew-toolbar-group--segmented .ew-button {
+  border-radius: 0;
+  border-color: var(--ib-border-strong);
+  background: var(--ib-bg-button);
+}
+
+.ew-toolbar-group--segmented .ew-button + .ew-button {
+  margin-left: -1px;
+}
+
+.ew-toolbar-group--segmented .ew-button:first-child {
+  border-radius: 2px 0 0 2px;
+}
+
+.ew-toolbar-group--segmented .ew-button:last-child {
+  border-radius: 0 2px 2px 0;
+}
+
+.ew-toolbar-group--segmented .ew-button--active {
+  position: relative;
+  z-index: 1;
+  background: var(--ib-bg-button-active);
 }
 
 /* --- the revert control between the diff panes ---------------------------- */
@@ -140,9 +205,21 @@ body {
    reach it. @codemirror/merge positions the buttons itself; only the colours are
    ours. */
 .cm-merge-revert button {
+  display: flex;
+  align-items: center;
+  justify-content: center;
   color: var(--ib-text-dim);
   line-height: 1;
   padding: 0;
+}
+
+/* `editor/iconElement` ships no width or height, so every call site sizes its
+   own — and an unsized outermost `<svg>` does not shrink to fit, it falls back to
+   the default object size. The package gives the column `width: 1.6em`, which
+   would otherwise be all this had to go on. */
+.cm-merge-revert button svg {
+  width: 14px;
+  height: 14px;
 }
 
 .cm-merge-revert button:hover {

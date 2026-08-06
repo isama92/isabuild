@@ -25,7 +25,15 @@ import { resolveViewOptions, VIEW_OPTIONS, type ViewOptionState } from "./viewOp
 export interface ViewOptions {
   /** Resolved state for every option in the registry, id-keyed. */
   state: ViewOptionState;
-  toggle: (id: string) => void;
+  /**
+   * Write a value.
+   *
+   * There is deliberately no `toggle` beside it. A segmented pair needs to be able
+   * to say "be false" — clicking the face that is already on must be a no-op, not
+   * the way back — so every caller moved to this, and a flip helper would have been
+   * a second read of the store between this one's read and its write.
+   */
+  set: (id: string, value: boolean) => void;
 }
 
 /**
@@ -67,11 +75,11 @@ export function useViewOptions(): ViewOptions {
   // can put this in a dependency array and have it mean something.
   const state = useMemo(() => resolveViewOptions(overrides ?? {}), [overrides]);
 
-  const toggle = useCallback(
-    (id: string) => {
+  const set = useCallback(
+    (id: string, value: boolean) => {
       // Read at click time, not at render time: another window's toggle may have
-      // arrived through `settings://changed` in between, and flipping a value that
-      // has already moved would undo their change instead of making ours.
+      // arrived through `settings://changed` in between, and writing against a
+      // value that has already moved would undo their change instead of making ours.
       const settings = useSettingsStore.getState().settings;
       // Nothing to merge into yet. Writing here would send a map built from `{}`,
       // and because the patch replaces the map wholesale that would erase every
@@ -82,10 +90,14 @@ export function useViewOptions(): ViewOptions {
       if (settings === null) return;
       const stored = settings.viewOptions;
       const current = resolveViewOptions(stored);
-      void save({ viewOptions: nextOverrides(stored, id, !current[id]) });
+      // Clicking the already-selected face of a segmented pair asks for the value
+      // it already holds. No write, so no IPC and no `settings://changed` telling
+      // every other window that nothing happened.
+      if (current[id] === value) return;
+      void save({ viewOptions: nextOverrides(stored, id, value) });
     },
     [save],
   );
 
-  return { state, toggle };
+  return { state, set };
 }

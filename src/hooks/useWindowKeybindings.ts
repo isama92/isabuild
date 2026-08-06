@@ -19,6 +19,8 @@ export type WindowAction =
   | "close-window"
   | "next-change"
   | "previous-change"
+  | "next-file"
+  | "previous-file"
   | "next-conflict"
   | "previous-conflict";
 

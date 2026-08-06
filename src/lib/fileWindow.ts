@@ -50,6 +50,17 @@ export function fileWindowLabel(prefix: string, target: FileTarget): string {
 
 export interface OpenFileWindowOptions {
   label: string;
+  /**
+   * The window to focus if one is already open for this file, when that is not
+   * `label`.
+   *
+   * A diff window's label is the file it was *opened* with, and a window that has
+   * since navigated to a sibling is showing a file whose label belongs to nobody.
+   * The backend knows where each window actually is and answers with the label to
+   * focus; see `lib/diffRegistry`. Creation still uses `label`, so a window that
+   * has to be made is made under the name its file expects.
+   */
+  focusLabel?: string;
   /** Document URL, including the query string carrying the target. */
   url: string;
   title: string;
@@ -69,7 +80,7 @@ export interface OpenFileWindowOptions {
  * than leaving a click that did nothing.
  */
 export async function openFileWindow(options: OpenFileWindowOptions): Promise<void> {
-  const existing = await WebviewWindow.getByLabel(options.label);
+  const existing = await WebviewWindow.getByLabel(options.focusLabel ?? options.label);
   if (existing) {
     // Unminimize first: focusing a minimised window does nothing on its own, so
     // the second click on a file would look like it did nothing at all.
