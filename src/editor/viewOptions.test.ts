@@ -100,6 +100,12 @@ describe("optionsForGroup", () => {
       "collapse-unchanged",
     );
   });
+
+  it("puts an option in the cluster it names", () => {
+    expect(optionsForGroup("diff", "view-mode").map((option) => option.id)).toEqual([
+      "unified-view",
+    ]);
+  });
 });
 
 describe("viewOptionItems", () => {
@@ -131,8 +137,16 @@ describe("viewOptionItems", () => {
     expect(viewOptionItems("merge", {}, vi.fn())).toEqual([]);
   });
 
-  it("produces nothing for a cluster this window has no options in", () => {
-    expect(viewOptionItems("diff", {}, vi.fn(), { group: "view-mode" })).toEqual([]);
+  it("keeps the clusters apart, so a pane can place them at opposite ends", () => {
+    // The whole reason `group` exists: Compact belongs on the left of the diff
+    // toolbar and the view-mode pair on the right, and neither call may emit the
+    // other's buttons.
+    const left = viewOptionItems("diff", {}, vi.fn());
+    const right = viewOptionItems("diff", {}, vi.fn(), { group: "view-mode" });
+
+    expect(left.map((item) => group(item).id)).toEqual(["view-options"]);
+    expect(group(left[0]).items.map((child) => child.id)).toEqual(["collapse-unchanged"]);
+    expect(right.map((item) => group(item).id)).toEqual(["unified-view"]);
   });
 });
 

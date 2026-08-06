@@ -41,7 +41,7 @@ import {
   themeTransaction,
 } from "../editor/codemirror";
 import { iconElement } from "../editor/iconElement";
-import { DIFF_TIMEOUT_MS, type DiffViewProps } from "./diffView";
+import { clampTo, DIFF_TIMEOUT_MS, type DiffViewProps } from "./diffView";
 
 /** Neither pane may be squeezed below this fraction of the width. */
 const MIN_PANE = 0.15;
@@ -72,6 +72,8 @@ export function SplitPanes({
   onMeasure,
   onLayout,
   onReady,
+  takeHandoff,
+  onHandoff,
   onSplitFraction,
 }: SplitPanesProps) {
   const hostRef = useRef<HTMLDivElement>(null);
@@ -88,6 +90,19 @@ export function SplitPanes({
   const measureRef = useRef(onMeasure);
   const layoutRef = useRef(onLayout);
   const fractionRef = useRef(onSplitFraction);
+  const takeHandoffRef = useRef(takeHandoff);
+  const handoffRef = useRef(onHandoff);
+
+  /**
+   * The revision this pane has already taken from disk.
+   *
+   * Seeded rather than started at -1, so the follow-`right` effect below does
+   * nothing on mount. It has to be inert there: a pane mounted from a handoff
+   * holds an unsaved edit, while `right` is the older content the window froze to
+   * protect it, and a mount-time adopt would push that older content straight
+   * over the edit.
+   */
+  const adoptedRef = useRef(rightRevision);
 
   // Declared before the construction effect so it always runs first.
   useEffect(() => {
@@ -95,7 +110,9 @@ export function SplitPanes({
     measureRef.current = onMeasure;
     layoutRef.current = onLayout;
     fractionRef.current = onSplitFraction;
-  }, [onLayout, onMeasure, onRightChange, onSplitFraction]);
+    takeHandoffRef.current = takeHandoff;
+    handoffRef.current = onHandoff;
+  }, [onHandoff, onLayout, onMeasure, onRightChange, onSplitFraction, takeHandoff]);
 
   /**
    * Re-measure the change map, and report the divider's position.
@@ -198,6 +215,10 @@ export function SplitPanes({
     const host = hostRef.current;
     if (!host) return;
     const seed = seedRef.current;
+    // What the previous pane held, which is not always what the window last read
+    // from disk. See `DiffHandoff`.
+    const handoff = takeHandoffRef.current();
+    const startingDoc = handoff?.doc ?? seed.right;
 
     const merge = new MergeView({
       parent: host,
@@ -216,7 +237,13 @@ export function SplitPanes({
         ],
       },
       b: {
-        doc: seed.right,
+        doc: startingDoc,
+        selection: handoff
+          ? {
+              anchor: clampTo(handoff.anchor, startingDoc),
+              head: clampTo(handoff.head, startingDoc),
+            }
+          : undefined,
         extensions: [
           ...paneExtensions(seed.theme),
           ...searchExtensions(),
@@ -262,8 +289,15 @@ export function SplitPanes({
     // The MergeView measures itself on an animation frame, and its spacers do not
     // exist until it has: measuring the map before that would place every mark
     // against an unspaced height. A second pass once the frame has run is the
-    // cheapest way to be right without reaching into its internals.
-    const frame = requestAnimationFrame(measureNow);
+    // cheapest way to be right without reaching into its internals. Restoring the
+    // scroll waits for the same frame, and for the same reason — before it, every
+    // line is at zero.
+    const frame = requestAnimationFrame(() => {
+      measureNow();
+      if (handoff) {
+        merge.dom.scrollTop = merge.b.lineBlockAt(clampTo(handoff.topPos, startingDoc)).top;
+      }
+    });
 
     // Both the window resizing and the divider moving change where the split is
     // and how tall the content is.
@@ -276,6 +310,15 @@ export function SplitPanes({
       if (measureFrameRef.current !== null) cancelAnimationFrame(measureFrameRef.current);
       measureFrameRef.current = null;
       observer.disconnect();
+      // Before `destroy`, or there is nothing left to read it from.
+      const selection = merge.b.state.selection.main;
+      handoffRef.current({
+        doc: merge.b.state.doc.toString(),
+        anchor: selection.anchor,
+        head: selection.head,
+        topPos: merge.b.lineBlockAtHeight(merge.dom.scrollTop).from,
+        revision: adoptedRef.current,
+      });
       // Ends a drag that is still in progress: the listeners are on `window`, so
       // without this they would outlive the panes they are resizing.
       endDragRef.current?.();
@@ -309,11 +352,16 @@ export function SplitPanes({
     remeasure();
   }, [left, remeasure]);
 
-  // Keyed on the revision as well as the content — see the prop's doc comment: an
-  // adopt can hand back a string this editor was already shown, and the revision
-  // is what makes that visible here. The value guard still stands, so a revision
-  // bump whose content the editor already holds resets nothing.
+  // Driven by the revision *moving*, not by the props differing — see the prop's
+  // doc comment: an adopt can hand back a string this editor was already shown,
+  // and the revision is what makes that visible. Checking the movement rather than
+  // the value is also what keeps this inert on mount, which matters because a pane
+  // mounted from a handoff holds an edit that `right` is deliberately older than.
+  // The value guard still stands, so a bump whose content the editor already holds
+  // resets nothing.
   useEffect(() => {
+    if (adoptedRef.current === rightRevision) return;
+    adoptedRef.current = rightRevision;
     const view = mergeRef.current?.b;
     if (!view || view.state.doc.toString() === right) return;
     view.dispatch({ changes: { from: 0, to: view.state.doc.length, insert: right } });

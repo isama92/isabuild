@@ -92,6 +92,27 @@ export const VIEW_OPTIONS: readonly ViewOption[] = [
     default: false,
     icon: Icons.collapseUnchanged,
   },
+  {
+    id: "unified-view",
+    label: "View mode",
+    tooltip: "Whether the diff is laid out as two panes or one",
+    scopes: ["diff"],
+    default: false,
+    group: "view-mode",
+    control: {
+      kind: "segmented",
+      off: {
+        label: "Two panels",
+        tooltip: "HEAD and the working tree side by side",
+        icon: Icons.splitView,
+      },
+      on: {
+        label: "One panel",
+        tooltip: "One document, with HEAD's lines shown above each change",
+        icon: Icons.unifiedView,
+      },
+    },
+  },
 ];
 
 /** An option's state, id-keyed. */

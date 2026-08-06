@@ -25,12 +25,23 @@
 //   pointer coordinates by the host's width, and in jsdom both are zero, so the
 //   fraction a real drag would produce is NaN here. That the fraction survives a
 //   remount is a manual check.
+//
+// The one-pane view is the exception to most of that, and worth knowing about:
+// `unifiedMergeView` builds its chunks synchronously, renders its deleted blocks
+// as real DOM, and its restore control *is* clickable here — so the case that has
+// to be a manual check in the two-pane view is a real test below. What is still
+// out of reach there: that the deleted blocks are the right height, that Compact
+// shortens anything (only the presence of `.cm-collapsedLines` is assertable),
+// that the view scrolls and virtualises, and that a scroll position survives a
+// mode switch. Deleted lines' syntax highlighting is untestable in this file at
+// all, because `@codemirror/language-data` is mocked to `[]`, so no language ever
+// resolves.
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, render, screen, waitFor } from "@testing-library/react";
 import { EditorView } from "@codemirror/view";
 import { openSearchPanel } from "@codemirror/search";
-import { getChunks } from "@codemirror/merge";
+import { getChunks, getOriginalDoc } from "@codemirror/merge";
 import { DiffPane, type DiffPaneProps } from "./DiffPane";
 import { initialSettingsState, useSettingsStore } from "../store/settingsStore";
 import { publishAppearance, resetAppearance } from "../lib/appearance";
@@ -68,6 +79,22 @@ function props(overrides: Partial<DiffPaneProps> = {}): DiffPaneProps {
     onLayout: vi.fn(),
     ...overrides,
   };
+}
+
+/** Turn the one-pane view on or off the way the toolbar's persistence would. */
+function setUnified(value: boolean): void {
+  act(() => {
+    useSettingsStore.setState({ settings: settings({ "unified-view": value }) });
+  });
+}
+
+/** The one-pane view's only editor. */
+function unifiedView(container: HTMLElement): EditorView {
+  const roots = Array.from(container.querySelectorAll<HTMLElement>(".cm-editor"));
+  if (roots.length !== 1) throw new Error(`expected one editor, found ${roots.length}`);
+  const view = EditorView.findFromDOM(roots[0]);
+  if (!view) throw new Error("no unified pane");
+  return view;
 }
 
 /** The live view for one side. `a` is HEAD, `b` the working tree. */
@@ -348,6 +375,208 @@ describe("the toolbar", () => {
 
     // Line 2 is the one that differs.
     expect(view.state.doc.lineAt(view.state.selection.main.head).number).toBe(2);
+  });
+});
+
+describe("the view mode", () => {
+  it("offers two panels and one panel as one control, two panels chosen", () => {
+    render(<DiffPane {...props()} />);
+    expect(screen.getByRole("button", { name: "Two panels", pressed: true })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "One panel", pressed: false })).toBeInTheDocument();
+  });
+
+  it("persists the choice, so every diff window agrees and it survives a restart", () => {
+    render(<DiffPane {...props()} />);
+    act(() => screen.getByRole("button", { name: "One panel" }).click());
+    expect(save).toHaveBeenCalledWith({ viewOptions: { "unified-view": true } });
+  });
+
+  it("writes nothing when the mode already chosen is chosen again", () => {
+    render(<DiffPane {...props()} />);
+    act(() => screen.getByRole("button", { name: "Two panels" }).click());
+    expect(save).not.toHaveBeenCalled();
+  });
+
+  it("mounts one editor and no MergeView when the settings say one panel", () => {
+    useSettingsStore.setState({ settings: settings({ "unified-view": true }) });
+    const { container } = render(<DiffPane {...props()} />);
+
+    expect(container.querySelectorAll(".cm-editor")).toHaveLength(1);
+    expect(container.querySelector(".cm-mergeView")).toBeNull();
+  });
+
+  it("keeps an unsaved edit when the mode changes", () => {
+    // The headline case for `DiffHandoff`. The window freezes `right` at the last
+    // content it read from disk while it protects typing, so a pane seeded from
+    // that prop would show — and then save — an older file than the one the user
+    // is looking at. The outgoing pane hands over what it actually holds.
+    const { container } = render(<DiffPane {...props()} />);
+    act(() => {
+      pane(container, "b").dispatch({ changes: { from: 0, insert: "typed " } });
+    });
+
+    setUnified(true);
+
+    expect(unifiedView(container).state.doc.toString()).toBe("typed one\nTWO\nthree\n");
+  });
+
+  it("carries the edit back again when the mode changes twice", () => {
+    const { container } = render(<DiffPane {...props()} />);
+    act(() => {
+      pane(container, "b").dispatch({ changes: { from: 0, insert: "typed " } });
+    });
+
+    setUnified(true);
+    setUnified(false);
+
+    expect(docOf(container, "b")).toBe("typed one\nTWO\nthree\n");
+  });
+
+  it("keeps the cursor where it was", () => {
+    // Both modes index the same working-tree string, so a document offset means
+    // the same thing on either side of the switch and needs no mapping.
+    const { container } = render(<DiffPane {...props()} />);
+    act(() => {
+      pane(container, "b").dispatch({ selection: { anchor: 5 } });
+    });
+
+    setUnified(true);
+
+    expect(unifiedView(container).state.selection.main.anchor).toBe(5);
+  });
+
+  it("tells the window there is no divider to track", () => {
+    const onLayout = vi.fn();
+    useSettingsStore.setState({ settings: settings({ "unified-view": true }) });
+    render(<DiffPane {...props({ onLayout })} />);
+
+    expect(onLayout).toHaveBeenCalledWith({ mode: "unified" });
+  });
+
+  it("counts the changes the same either way", () => {
+    const { unmount } = render(<DiffPane {...props()} />);
+    expect(screen.getByText("1 change")).toBeInTheDocument();
+    unmount();
+
+    useSettingsStore.setState({ settings: settings({ "unified-view": true }) });
+    render(<DiffPane {...props()} />);
+    expect(screen.getByText("1 change")).toBeInTheDocument();
+  });
+});
+
+describe("the one-pane view", () => {
+  beforeEach(() => {
+    useSettingsStore.setState({ settings: settings({ "unified-view": true }), save });
+  });
+
+  it("holds the working tree, with HEAD as the original it compares against", () => {
+    const { container } = render(<DiffPane {...props()} />);
+    const view = unifiedView(container);
+
+    expect(view.state.doc.toString()).toBe("one\nTWO\nthree\n");
+    expect(getOriginalDoc(view.state).toString()).toBe("one\ntwo\nthree\n");
+  });
+
+  it("diffs them", () => {
+    const { container } = render(<DiffPane {...props()} />);
+    const found = getChunks(unifiedView(container).state);
+    expect(found?.chunks).toHaveLength(1);
+    expect(found?.chunks.every((chunk) => chunk.precise)).toBe(true);
+  });
+
+  it("replaces HEAD when a new commit arrives, without it reading as an edit", () => {
+    // The guarantee the split view gets for free by having two editors:
+    // `originalDocChangeEffect` carries no document change, so nothing about a new
+    // commit can reach the window's auto-save.
+    const onRightChange = vi.fn();
+    const { container, rerender } = render(<DiffPane {...props({ onRightChange })} />);
+
+    rerender(<DiffPane {...props({ onRightChange, left: "one\nthree\n" })} />);
+
+    expect(getOriginalDoc(unifiedView(container).state).toString()).toBe("one\nthree\n");
+    expect(onRightChange).not.toHaveBeenCalled();
+  });
+
+  it("adopts working-tree content the window decided to push in", () => {
+    const { container, rerender } = render(<DiffPane {...props()} />);
+    rerender(<DiffPane {...props({ right: "from disk\n", rightRevision: 1 })} />);
+    expect(unifiedView(container).state.doc.toString()).toBe("from disk\n");
+  });
+
+  it("keeps what HEAD said when Compact is toggled", () => {
+    // The regression test for the sharpest edge in `unifiedMergeView`: a
+    // compartment reconfigure re-initialises the original document from whatever
+    // `original` the new extension array carries. Pass a stale one and HEAD is
+    // silently rewritten, so the diff starts describing a commit that never was.
+    const { container, rerender } = render(<DiffPane {...props({ left: "one\ntwo\nthree\n" })} />);
+    rerender(<DiffPane {...props({ left: "committed\ntwo\nthree\n" })} />);
+
+    act(() => {
+      useSettingsStore.setState({
+        settings: settings({ "unified-view": true, "collapse-unchanged": true }),
+      });
+    });
+
+    expect(getOriginalDoc(unifiedView(container).state).toString()).toBe(
+      "committed\ntwo\nthree\n",
+    );
+  });
+
+  it("lets the working tree be typed into, and reports what it now holds", () => {
+    const onRightChange = vi.fn();
+    const { container } = render(<DiffPane {...props({ onRightChange })} />);
+
+    act(() => {
+      unifiedView(container).dispatch({ changes: { from: 0, insert: "edited " } });
+    });
+
+    expect(onRightChange).toHaveBeenCalledWith("edited one\nTWO\nthree\n");
+  });
+
+  it("moves the cursor to the next change", () => {
+    const { container } = render(<DiffPane {...props()} />);
+    act(() => screen.getByRole("button", { name: "Next change" }).click());
+    expect(unifiedView(container).state.selection.main.head).toBeGreaterThan(0);
+  });
+});
+
+describe("the one-pane view's restore control", () => {
+  beforeEach(() => {
+    useSettingsStore.setState({ settings: settings({ "unified-view": true }), save });
+  });
+
+  /** The buttons the package renders inside a deleted block. */
+  function chunkButtons(container: HTMLElement): HTMLButtonElement[] {
+    return Array.from(container.querySelectorAll<HTMLButtonElement>(".cm-chunkButtons button"));
+  }
+
+  it("offers exactly one control per change, because the accept face is a lie", () => {
+    // `mergeControls: true` would also render Accept, which dispatches
+    // `updateOriginalDoc` — it edits the in-memory copy of HEAD so the block stops
+    // being highlighted. Against a git blob that is undone by the next refresh.
+    const { container } = render(<DiffPane {...props()} />);
+    expect(chunkButtons(container)).toHaveLength(1);
+    expect(chunkButtons(container)[0]).toHaveAccessibleName("Restore this block from HEAD");
+  });
+
+  it("restores a block from HEAD", () => {
+    // Clickable here, unlike the two-pane view's control, which the package places
+    // from measured positions that jsdom does not have.
+    const onRightChange = vi.fn();
+    const { container } = render(<DiffPane {...props({ onRightChange })} />);
+
+    act(() => chunkButtons(container)[0].dispatchEvent(new MouseEvent("mousedown", { bubbles: true })));
+
+    expect(unifiedView(container).state.doc.toString()).toBe("one\ntwo\nthree\n");
+    expect(onRightChange).toHaveBeenCalledWith("one\ntwo\nthree\n");
+  });
+
+  it("offers no control at all for a deleted file", () => {
+    // Not a disabled one: `rejectChunk` dispatches straight past
+    // `EditorState.readOnly`, because `readOnly` is a facet commands consult and
+    // `view.dispatch` does not. A control that is there is a control that works.
+    const { container } = render(<DiffPane {...props({ right: "", rightEditable: false })} />);
+    expect(chunkButtons(container)).toHaveLength(0);
   });
 });
 

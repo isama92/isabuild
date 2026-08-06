@@ -73,6 +73,31 @@ export type DiffHeaderLayout =
   | { mode: "split"; splitAt: number | null }
   | { mode: "unified" };
 
+/**
+ * What an outgoing pane leaves for the incoming one when the view mode changes.
+ *
+ * `doc` is the load-bearing field, and it is why this exists at all. The window
+ * freezes the `right` prop at the last content it adopted from disk while it
+ * protects unsaved typing, so a pane seeded from that prop after an edit would
+ * show an older file than the one about to be saved — the user would watch their
+ * typing vanish, with no error and nothing on screen agreeing with what is on its
+ * way to disk. The outgoing pane hands over what it actually holds.
+ *
+ * The positions need no mapping: the split view's B pane and the unified view's
+ * only document are both the working tree, so a document offset means the same
+ * thing on either side of the switch. That is the whole reason this is four
+ * numbers and a string rather than a translation layer.
+ */
+export interface DiffHandoff {
+  doc: string;
+  anchor: number;
+  head: number;
+  /** The document position that was at the top of the viewport. */
+  topPos: number;
+  /** The revision `doc` corresponds to. See `DiffViewProps.rightRevision`. */
+  revision: number;
+}
+
 /** Everything a diff pane takes. */
 export interface DiffViewProps {
   /** HEAD side. Empty string for a file that is not in HEAD yet. */
@@ -100,4 +125,27 @@ export interface DiffViewProps {
   onLayout: (layout: DiffHeaderLayout) => void;
   /** Handed the controller on mount and `null` on unmount. */
   onReady: (handle: DiffPaneHandle | null) => void;
+  /**
+   * What the pane that was here left behind, or null on the first mount. Read
+   * inside the construction effect, never during render.
+   *
+   * Deliberately does not clear what it returns: StrictMode mounts, tears down
+   * and mounts again, so a read that consumed the handoff would lose it on the
+   * second mount. Nothing else reads it, and every teardown overwrites it.
+   */
+  takeHandoff: () => DiffHandoff | null;
+  /** Called from the teardown, before the editor is destroyed. */
+  onHandoff: (handoff: DiffHandoff) => void;
+}
+
+/**
+ * A position from the outgoing pane, held inside the incoming document.
+ *
+ * The two views index the same working-tree string, so a handed-over position is
+ * normally already valid. Normally, not always: an adopt from disk can land in
+ * the same commit as a mode switch, replacing the document with a shorter one,
+ * and CodeMirror throws on an out-of-range selection rather than clamping.
+ */
+export function clampTo(pos: number, doc: string): number {
+  return Math.max(0, Math.min(pos, doc.length));
 }

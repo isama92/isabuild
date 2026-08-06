@@ -6,6 +6,14 @@
 // once, from what the pane reports through `onMeasure` — so a second pane with a
 // different layout is a component that satisfies `DiffViewProps`, not a second
 // copy of the chrome. `diffView.ts` is the contract between the two halves.
+//
+// Which pane is mounted is a view option, so the choice persists and reaches every
+// open diff window through `settings://changed`. Switching is a full teardown:
+// React unmounts one component and mounts the other, so the editor is destroyed
+// and rebuilt and the diff runs again. What survives is the working-tree text, the
+// cursor and roughly the scroll position, all through `DiffHandoff`; what does not
+// is the undo history and any open find panel, because a CodeMirror state cannot
+// be moved between two editors with different extensions.
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { currentAppearance, onAppearance } from "../lib/appearance";
@@ -19,7 +27,14 @@ import { OverviewRuler } from "../editor/OverviewRuler";
 import { useViewOptions } from "../editor/useViewOptions";
 import { viewOptionItems } from "../editor/viewOptions";
 import { SplitPanes } from "./SplitPanes";
-import type { DiffHeaderLayout, DiffMeasurement, DiffPaneHandle } from "./diffView";
+import { UnifiedPane } from "./UnifiedPane";
+import type {
+  DiffHandoff,
+  DiffHeaderLayout,
+  DiffMeasurement,
+  DiffPaneHandle,
+  DiffViewProps,
+} from "./diffView";
 
 export interface DiffPaneProps {
   /** HEAD side. Empty string for a file that is not in HEAD yet. */
@@ -69,6 +84,20 @@ export function DiffPane({
   const handleRef = useRef<DiffPaneHandle | null>(null);
   const { state: options, set: setOption } = useViewOptions();
   const collapse = options["collapse-unchanged"] ?? false;
+  const unified = options["unified-view"] ?? false;
+
+  /**
+   * What the pane being replaced left behind.
+   *
+   * Written in the outgoing pane's teardown and read in the incoming one's
+   * construction, both of which are effects — so this is never touched during
+   * render, and the two panes never have to know about each other.
+   */
+  const handoffRef = useRef<DiffHandoff | null>(null);
+  const takeHandoff = useCallback(() => handoffRef.current, []);
+  const putHandoff = useCallback((handoff: DiffHandoff) => {
+    handoffRef.current = handoff;
+  }, []);
 
   const handleMeasure = useCallback(
     (next: DiffMeasurement) => {
@@ -109,6 +138,22 @@ export function DiffPane({
   );
 
   const { changeCount, stripes } = measurement;
+
+  const paneProps: DiffViewProps = {
+    left,
+    right,
+    rightRevision,
+    path,
+    rightEditable,
+    collapse,
+    theme,
+    onRightChange,
+    onMeasure: handleMeasure,
+    onLayout,
+    onReady: handleReady,
+    takeHandoff,
+    onHandoff: putHandoff,
+  };
 
   const items = useMemo<ToolbarItem[]>(
     () => [
@@ -156,21 +201,15 @@ export function DiffPane({
     <div className="diff-panes">
       <EditorToolbar items={items} label="Diff view" />
       <div className="diff-editor-row">
-        <SplitPanes
-          left={left}
-          right={right}
-          rightRevision={rightRevision}
-          path={path}
-          rightEditable={rightEditable}
-          collapse={collapse}
-          theme={theme}
-          splitFraction={splitFraction}
-          onRightChange={onRightChange}
-          onMeasure={handleMeasure}
-          onLayout={onLayout}
-          onReady={handleReady}
-          onSplitFraction={setSplitFraction}
-        />
+        {unified ? (
+          <UnifiedPane {...paneProps} />
+        ) : (
+          <SplitPanes
+            {...paneProps}
+            splitFraction={splitFraction}
+            onSplitFraction={setSplitFraction}
+          />
+        )}
         <OverviewRuler
           stripes={stripes}
           colors={markerColors(theme)}

@@ -268,23 +268,33 @@ export function DiffWindow() {
       className="diff-window"
       notices={notices}
       header={
-        <>
-          <div
-            className="diff-header-side"
-            style={
-              layout.mode === "split" && layout.splitAt !== null
-                ? { flex: `0 0 ${layout.splitAt}px` }
-                : undefined
-            }
-          >
+        layout.mode === "unified" ? (
+          // One document, so one header. No divider to track, and no border down
+          // the middle, because there is nothing on either side of it.
+          <div className="diff-header-side diff-header-side--unified">
             <span className="diff-sha">{leftSha}</span>
             <span className="diff-header-path">{isNewFile ? "(new file)" : leftPath}</span>
-          </div>
-          <div className="diff-header-side diff-header-side--right">
+            <span className="diff-header-arrow" aria-hidden="true">
+              →
+            </span>
             <span className="diff-header-path">Current version</span>
             {isDeleted && <span className="diff-header-note">(deleted)</span>}
           </div>
-        </>
+        ) : (
+          <>
+            <div
+              className="diff-header-side"
+              style={layout.splitAt === null ? undefined : { flex: `0 0 ${layout.splitAt}px` }}
+            >
+              <span className="diff-sha">{leftSha}</span>
+              <span className="diff-header-path">{isNewFile ? "(new file)" : leftPath}</span>
+            </div>
+            <div className="diff-header-side diff-header-side--right">
+              <span className="diff-header-path">Current version</span>
+              {isDeleted && <span className="diff-header-note">(deleted)</span>}
+            </div>
+          </>
+        )
       }
     >
       {!failed && phase === "loading" && <p className="ew-notice">Loading diff…</p>}

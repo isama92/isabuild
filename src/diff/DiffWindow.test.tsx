@@ -5,6 +5,7 @@ import { DiffWindow } from "./DiffWindow";
 import { getFileDiff, writeWorkingFile, type FileDiff } from "../lib/diffSource";
 import { onRepoChanged } from "../lib/gitStatus";
 import { getCurrentWindow } from "@tauri-apps/api/window";
+import type { DiffHeaderLayout } from "./diffView";
 
 // DiffPane is the CodeMirror boundary. It is stubbed here — not because it cannot
 // run under jsdom (it can, and DiffPane.test drives the real thing), but because
@@ -15,6 +16,14 @@ import { getCurrentWindow } from "@tauri-apps/api/window";
 // content it displays and the edit callback — and copies the one behaviour these
 // tests depend on: the buffer lives inside the pane, and an incoming `right`
 // replaces it only when it actually changed (the real pane's equality guard).
+/**
+ * What the pane reports as the header's shape, for the test that changes it.
+ *
+ * A module-level box rather than a prop, because the mock is hoisted above every
+ * `let` a test could otherwise assign. Reset in `beforeEach`.
+ */
+const paneLayout: { current: DiffHeaderLayout } = { current: { mode: "split", splitAt: 240 } };
+
 vi.mock("./DiffPane", () => ({
   DiffPane: ({
     left,
@@ -22,12 +31,14 @@ vi.mock("./DiffPane", () => ({
     rightRevision,
     rightEditable,
     onRightChange,
+    onLayout,
   }: {
     left: string;
     right: string;
     rightRevision: number;
     rightEditable: boolean;
     onRightChange: (value: string) => void;
+    onLayout: (layout: DiffHeaderLayout) => void;
   }) => {
     const [value, setValue] = useState(right);
     // Keyed exactly like the real pane: content plus revision, so a test can
@@ -35,6 +46,11 @@ vi.mock("./DiffPane", () => ({
     useEffect(() => {
       setValue(right);
     }, [right, rightRevision]);
+    // The real panes report this from a layout effect, each describing its own
+    // shape; the window has no other way to know how to divide the header.
+    useEffect(() => {
+      onLayout(paneLayout.current);
+    }, [onLayout]);
     return (
       <div data-testid="pane" data-left={left} data-editable={String(rightEditable)}>
         <textarea
@@ -90,12 +106,14 @@ function fileDiff(overrides: Partial<FileDiff> = {}): FileDiff {
 /** Render and wait for the initial load to settle (whatever it renders). */
 async function renderReady(diff: FileDiff = fileDiff()) {
   getFileDiffMock.mockResolvedValue(diff);
-  render(<DiffWindow />);
+  const view = render(<DiffWindow />);
   await waitFor(() => expect(screen.queryByText(/loading diff/i)).not.toBeInTheDocument());
+  return view;
 }
 
 beforeEach(() => {
   vi.useFakeTimers({ shouldAdvanceTime: true });
+  paneLayout.current = { mode: "split", splitAt: 240 };
   window.history.replaceState({}, "", "/diff.html?repo=%2Fr&path=src%2Fa.ts");
   writeWorkingFileMock.mockResolvedValue(undefined);
   onRepoChangedMock.mockImplementation((callback) => {
@@ -126,6 +144,27 @@ describe("DiffWindow", () => {
       path: "src/a.ts",
       origPath: undefined,
     });
+  });
+
+  it("sizes the left header from the divider the pane reports", async () => {
+    const { container } = await renderReady();
+    expect(container.querySelector<HTMLElement>(".diff-header-side")?.style.flex).toBe(
+      "0 0 240px",
+    );
+  });
+
+  it("shows one header when the pane says there is no divider", async () => {
+    // The one-pane view has a single document, so the two halves that track a
+    // divider would be describing a divider that is not there.
+    paneLayout.current = { mode: "unified" };
+    const { container } = await renderReady();
+
+    expect(container.querySelectorAll(".diff-header-side")).toHaveLength(1);
+    expect(container.querySelector(".diff-header-side--unified")).not.toBeNull();
+    // The same facts, still all present.
+    expect(screen.getByText("dd875b8")).toBeInTheDocument();
+    expect(screen.getByText("src/a.ts")).toBeInTheDocument();
+    expect(screen.getByText("Current version")).toBeInTheDocument();
   });
 
   it("shows the head sha and path on the left, Current version on the right", async () => {
