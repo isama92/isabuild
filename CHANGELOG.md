@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.7.0](https://github.com/isama92/isabuild/compare/v0.6.0...v0.7.0) (2026-08-06)
+
+
+### Features
+
+* part 2 — diff window toolbar, file navigation and unified view ([#25](https://github.com/isama92/isabuild/issues/25)) ([e1a0be8](https://github.com/isama92/isabuild/commit/e1a0be838b9834f8ba98a4bf10bf80a86e940572))
+
 ## [0.6.0](https://github.com/isama92/isabuild/compare/v0.5.0...v0.6.0) (2026-08-05)
 
 
