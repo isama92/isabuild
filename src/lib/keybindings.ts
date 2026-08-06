@@ -112,6 +112,21 @@ export const ACTIONS: readonly KeyAction[] = [
     scopes: ["diff"],
     defaultAccelerator: "Alt+ArrowUp",
   },
+  // Horizontal to the pair above's vertical: down the file for changes, across
+  // the list for files. Free in this scope — the Alt+Arrow rows in `RESERVED` are
+  // the terminals' word motion, and those are workspace-only.
+  {
+    id: "next-file",
+    label: "Next changed file",
+    scopes: ["diff"],
+    defaultAccelerator: "Alt+ArrowRight",
+  },
+  {
+    id: "previous-file",
+    label: "Previous changed file",
+    scopes: ["diff"],
+    defaultAccelerator: "Alt+ArrowLeft",
+  },
   {
     id: "next-conflict",
     label: "Next conflict",

@@ -13,11 +13,22 @@
 // touch the buffer. The buffer itself lives in a ref, not in state: it must not
 // flow back down into DiffPane as the content to display.
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { DiffPane } from "./DiffPane";
 import type { DiffHeaderLayout } from "./diffView";
+import { EditorToolbar, type ToolbarItem } from "../editor/EditorToolbar";
 import { EditorWindow, type Notice } from "../editor/EditorWindow";
-import { useEditorWindow, type WindowTarget } from "../editor/useEditorWindow";
+import { Icons } from "../editor/icons";
+import { useEditorWindow, type NavigableWindowTarget } from "../editor/useEditorWindow";
+import { useWindowKeybindings } from "../hooks/useWindowKeybindings";
+import {
+  changedFiles,
+  indexOfPath,
+  reanchor,
+  type ChangedFile,
+} from "../lib/changedFiles";
+import { onShowFile, registerDiffWindow } from "../lib/diffRegistry";
+import { getStatus } from "../lib/gitStatus";
 import { shouldAdoptDiskContent } from "../lib/diffSync";
 import {
   getFileDiff,
@@ -52,6 +63,8 @@ export function DiffWindow() {
    * an equality-checked prop and leave the editor holding the newer buffer.
    */
   const [rightRevision, setRightRevision] = useState(0);
+  /** Every file this window can step to, refreshed on each `repo://changed`. */
+  const [files, setFiles] = useState<readonly ChangedFile[]>([]);
 
   // Mirrors of the state the async paths need to read without re-subscribing.
   const diffRef = useRef<FileDiff | null>(null);
@@ -63,6 +76,34 @@ export function DiffWindow() {
   const savesInFlightRef = useRef(0);
   /** Whether a failing close has already been refused once; see `onCloseRequest`. */
   const insistedRef = useRef(false);
+  /**
+   * The same, for a refused navigation; see `goToFile` for why it is separate.
+   *
+   * State rather than a ref, unlike its close-guard counterpart, because it is the
+   * only thing that changes when a navigation is refused — nothing else re-renders
+   * — and the notice has to grow a sentence explaining how to move on anyway.
+   */
+  const [navigateInsisted, setNavigateInsisted] = useState(false);
+  /** Whether a navigation is already in flight. Alt+ArrowRight autorepeats. */
+  const navigatingRef = useRef(false);
+  /** Where the window sat before the list last moved; see `reanchor`. */
+  const lastIndexRef = useRef(0);
+  /** Guards overlapping status reads, one per debounced watcher event. */
+  const statusInFlightRef = useRef(false);
+
+  /**
+   * Which file this window is on, counted rather than named.
+   *
+   * The params a save or a load carries say *what* to act on, and that is not the
+   * same question as *whether the answer is still wanted*. Two places ask it:
+   *
+   * - **`load`**, where it is the only thing stopping a diff read for the old file
+   *   from painting itself over the new one. A refresh in flight when Next File is
+   *   pressed does exactly that.
+   * - **`writeBuffer`**, where it is a backstop — see its own comment for what
+   *   holds that case today and why it is not enough to rely on.
+   */
+  const generationRef = useRef(0);
 
   const savePending = () => saveTimerRef.current !== null || savesInFlightRef.current > 0;
 
@@ -93,12 +134,24 @@ export function DiffWindow() {
     setError(null);
   }, []);
 
-  const writeBuffer = useCallback(async (params: DiffParams) => {
+  const writeBuffer = useCallback(async (params: DiffParams, generation: number) => {
     const current = diffRef.current;
     // Read the buffer here, not when the flush was requested: by now an earlier
     // write may have already persisted this content, or the user may have typed
     // on, and either way the newest content is the one worth writing.
     const value = bufferRef.current;
+    // Refuse to write for a file the window has left. `true`, not `false`: a
+    // superseded write has nothing left to do, and must not raise a save error or
+    // refuse a close.
+    //
+    // A backstop rather than the mechanism, and worth being exact about which.
+    // What actually closes the window today is `goToFile` nulling `diffRef`, two
+    // lines below: a stale write finds no diff and returns before it can do
+    // anything. But that is a *side effect* of resetting the adopt logic, and the
+    // day someone keeps `diffRef` across a load — to hold the header steady, say —
+    // the failure it was incidentally preventing is one file being overwritten
+    // with the contents of another, silently. Two lines to not depend on that.
+    if (generation !== generationRef.current) return true;
     if (!current || value === lastWrittenRef.current) {
       return true;
     }
@@ -107,6 +160,9 @@ export function DiffWindow() {
       await writeWorkingFile(params, value, current.eol);
       lastWrittenRef.current = value;
       setSaveError(null);
+      // A write that worked leaves nothing to insist about, so the next refusal
+      // starts from asking rather than from letting work go.
+      setNavigateInsisted(false);
       return true;
     } catch (cause) {
       setSaveError(cause instanceof Error ? cause.message : String(cause));
@@ -127,10 +183,20 @@ export function DiffWindow() {
   // effect can call this without cascading renders.
   const load = useCallback(
     (params: DiffParams) => {
-      void getFileDiff(params).then(applyFetched, (cause: unknown) => {
-        setPhase("error");
-        setError(cause instanceof Error ? cause.message : String(cause));
-      });
+      const generation = generationRef.current;
+      void getFileDiff(params).then(
+        (fetched) => {
+          // Arrived for a file this window has already left. Dropping it is the
+          // point: applying it would paint the old file's diff over the new one.
+          if (generation !== generationRef.current) return;
+          applyFetched(fetched);
+        },
+        (cause: unknown) => {
+          if (generation !== generationRef.current) return;
+          setPhase("error");
+          setError(cause instanceof Error ? cause.message : String(cause));
+        },
+      );
     },
     [applyFetched],
   );
@@ -151,7 +217,11 @@ export function DiffWindow() {
         window.clearTimeout(saveTimerRef.current);
         saveTimerRef.current = null;
       }
-      const result = saveChainRef.current.then(() => writeBuffer(params));
+      // Captured at *request* time, not when the chained write runs — by then the
+      // window may be on another file, and that is precisely what the write has to
+      // notice. See `generationRef`.
+      const generation = generationRef.current;
+      const result = saveChainRef.current.then(() => writeBuffer(params, generation));
       // The chain must survive a rejection, or every later save is skipped.
       saveChainRef.current = result.catch(() => undefined);
       return result;
@@ -159,16 +229,45 @@ export function DiffWindow() {
     [writeBuffer],
   );
 
+  /**
+   * Re-read the changed-file list.
+   *
+   * The diff window is its own webview and never mounts the git store, so it asks
+   * the backend directly. That is one extra `git status` per open diff window per
+   * debounced watcher event — acceptable, and guarded so overlapping events do not
+   * stack. A failure keeps the previous list: a broken list must never break the
+   * diff, which is the actual job of this window.
+   */
+  const refreshFiles = useCallback((repoRoot: string) => {
+    if (statusInFlightRef.current) return;
+    statusInFlightRef.current = true;
+    void getStatus(repoRoot)
+      .then((status) => {
+        // The project was switched under this window. Its own close is already on
+        // the way; a list from another repository is worse than a stale one.
+        if (status.repoRoot !== repoRoot) return;
+        setFiles(changedFiles(status));
+      })
+      .catch(() => undefined)
+      .finally(() => {
+        statusInFlightRef.current = false;
+      });
+  }, []);
+
   // Annotated rather than inferred, and deliberately so: the callbacks below read
   // `target` to find out which file they are acting on, and without the annotation
   // that self-reference leaves TypeScript inferring `any` for the whole thing.
-  const target: WindowTarget<DiffParams> = useEditorWindow<DiffParams>({
+  const target: NavigableWindowTarget<DiffParams> = useEditorWindow<DiffParams>({
     scope: "diff",
+    navigable: true,
     parse: parseDiffParams,
     titlePrefix: "Diff",
     pathOf: (params) => params.path,
     onRepoEvent: () => {
-      if (target.params) load(target.params);
+      if (target.params) {
+        load(target.params);
+        refreshFiles(target.params.repoRoot);
+      }
     },
     // An edit must not be lost when the window goes away. `close()` — ours, the
     // OS button, or the main window taking its diff windows with it — routes
@@ -225,6 +324,150 @@ export function DiffWindow() {
     if (target.params) load(target.params);
   }, [load, target.params]);
 
+  // Registered on mount as well as on every navigation, so a reload — which
+  // returns the window to the file in its URL — corrects the backend's record
+  // rather than leaving it describing where the window used to be.
+  useEffect(() => {
+    const params = target.params;
+    if (!params) return;
+    void registerDiffWindow(params).catch(() => undefined);
+    refreshFiles(params.repoRoot);
+  }, [refreshFiles, target.params]);
+
+  /**
+   * Show another file in this window.
+   *
+   * The order matters, and every step of it is load-bearing:
+   *
+   * 1. Refuse to re-enter. Alt+ArrowRight autorepeats, and without this a held key
+   *    stacks flushes and loads.
+   * 2. Flush into the file being *left*, named explicitly.
+   * 3. If that write failed, stay — with the error already on screen — and let a
+   *    second press through. `navigateInsistedRef` is separate from the close
+   *    guard's `insistedRef` on purpose: refusing a close and refusing a
+   *    navigation are different questions about the same file, and sharing the
+   *    flag would let a refused navigation silently permit the next close to throw
+   *    the work away without asking.
+   * 4. Bump the generation, *after* the awaited flush so our own write is not
+   *    cancelled by our own bump. Everything still queued for the old file is void
+   *    from this instant.
+   * 5. Reset the refs. `diffRef` is the subtle one: `applyFetched` keeps the
+   *    buffer only when there was a previous diff, so nulling it forces an
+   *    unconditional adopt of the new file. Leave it and `shouldAdoptDiskContent`
+   *    is asked with the *old* file's `lastWritten`, can decline, and the new
+   *    file's diff renders with the old file's text on the right.
+   *    `saveChainRef` and `savesInFlightRef` are deliberately left alone: the
+   *    chain is still the write-ordering mechanism, and zeroing the counter drives
+   *    it negative when the in-flight write lands, which would leave the close
+   *    guard's `savesInFlightRef.current === 0` false for the rest of the window's
+   *    life.
+   */
+  const goToFile = useCallback(
+    async (next: DiffParams) => {
+      const from = target.params;
+      if (!from || navigatingRef.current) return;
+      if (from.path === next.path && from.repoRoot === next.repoRoot) return;
+      navigatingRef.current = true;
+      try {
+        if (hasUnsavedEdit() || savesInFlightRef.current > 0) {
+          const saved = await flushSave(from);
+          if (!saved && !navigateInsisted) {
+            setNavigateInsisted(true);
+            return;
+          }
+        }
+
+        generationRef.current += 1;
+        if (saveTimerRef.current !== null) {
+          window.clearTimeout(saveTimerRef.current);
+          saveTimerRef.current = null;
+        }
+        bufferRef.current = "";
+        lastWrittenRef.current = null;
+        diffRef.current = null;
+        insistedRef.current = false;
+        setNavigateInsisted(false);
+
+        setDiff(null);
+        setPhase("loading");
+        setError(null);
+        setSaveError(null);
+        setImprecise(false);
+        // `layout` is deliberately not reset: the divider is a window preference
+        // the user just set, and the new pane reports a fresh value on mount.
+
+        void registerDiffWindow(next).catch(() => undefined);
+        // The effect keyed on `target.params` does the load, so there is one load
+        // path rather than two that can disagree.
+        target.navigate(next);
+      } finally {
+        navigatingRef.current = false;
+      }
+    },
+    [flushSave, navigateInsisted, target],
+  );
+
+  /** Where this window sits in the list, and how long the list is. */
+  const position = useMemo(() => {
+    const path = target.params?.path;
+    return {
+      index: path === undefined ? -1 : indexOfPath(files, path),
+      total: files.length,
+    };
+  }, [files, target.params]);
+
+  useEffect(() => {
+    if (position.index !== -1) lastIndexRef.current = position.index;
+  }, [position.index]);
+
+  const current = target.params;
+  const step = useCallback(
+    (delta: -1 | 1) => {
+      if (current === undefined || files.length === 0) return;
+      // `reanchor` rather than `position.index`, so a Next from a file that has
+      // just been committed away still goes somewhere sensible.
+      const from = reanchor(files, current.path, lastIndexRef.current);
+      const to = files[from + delta];
+      if (!to) return;
+      void goToFile({ repoRoot: current.repoRoot, path: to.path, origPath: to.origPath });
+    },
+    [current, files, goToFile],
+  );
+
+  useWindowKeybindings("diff", {
+    "next-file": () => step(1),
+    "previous-file": () => step(-1),
+  });
+
+  // Through a ref, and mirrored *before* the subscription below, so that one is
+  // registered exactly once: re-`listen`ing on every navigation would drop a
+  // request that arrived in the gap.
+  const goToFileRef = useRef(goToFile);
+  useEffect(() => {
+    goToFileRef.current = goToFile;
+  }, [goToFile]);
+
+  // The backend asking this window to come back to a file it was opened for and
+  // has since navigated away from, rather than a second window being opened onto
+  // a file already on screen. See `src-tauri/src/diffwindows.rs`.
+  useEffect(() => {
+    let unlisten: (() => void) | undefined;
+    let cancelled = false;
+    void onShowFile((requested) => {
+      void goToFileRef.current(requested);
+    }).then((handle) => {
+      if (cancelled) {
+        handle();
+        return;
+      }
+      unlisten = handle;
+    });
+    return () => {
+      cancelled = true;
+      unlisten?.();
+    };
+  }, []);
+
   // Losing focus is the other way edits can be left hanging (clicking away to
   // the main window, or the OS close button on platforms that blur first).
   useEffect(() => {
@@ -253,7 +496,16 @@ export function DiffWindow() {
     });
   }
   if (saveError !== null) {
-    notices.push({ id: "save", tone: "error", text: `Could not save: ${saveError}` });
+    notices.push({
+      id: "save",
+      tone: "error",
+      // The second half only once a navigation has actually been refused, so it
+      // reads as an answer to what was just attempted rather than a standing offer
+      // to lose work.
+      text: navigateInsisted
+        ? `Could not save: ${saveError} — press Next file again to move on and lose this change.`
+        : `Could not save: ${saveError}`,
+    });
   }
   if (imprecise) {
     notices.push({
@@ -263,10 +515,57 @@ export function DiffWindow() {
     });
   }
 
+  /**
+   * The file-navigation row.
+   *
+   * Rendered by the window rather than the pane because the pane is unmounted
+   * during every load and for a binary file, so a counter there would vanish at
+   * exactly the moment it is being used. The ends do not wrap: in a list of
+   * twenty-six, silently starting over reads as the button having done nothing.
+   */
+  const fileItems: ToolbarItem[] = [
+    {
+      kind: "group",
+      id: "files",
+      items: [
+        {
+          kind: "button",
+          id: "previous-file",
+          label: "Previous changed file",
+          tooltip: "Show the previous changed file in this window",
+          icon: Icons.previousFile,
+          disabled: position.index <= 0,
+          onSelect: () => step(-1),
+        },
+        {
+          kind: "button",
+          id: "next-file",
+          label: "Next changed file",
+          tooltip: "Show the next changed file in this window",
+          icon: Icons.nextFile,
+          disabled: position.index === -1 || position.index >= position.total - 1,
+          onSelect: () => step(1),
+        },
+      ],
+    },
+    {
+      kind: "status",
+      id: "files-count",
+      // An em dash for the position when the file has left the list — it was
+      // committed or reverted while open, and the window stays on it rather than
+      // closing out from under you.
+      text:
+        position.total === 0
+          ? "No changed files"
+          : `${position.index === -1 ? "—" : position.index + 1} / ${position.total} files`,
+    },
+  ];
+
   return (
     <EditorWindow
       className="diff-window"
       notices={notices}
+      toolbar={<EditorToolbar items={fileItems} label="Changed files" />}
       header={
         layout.mode === "unified" ? (
           // One document, so one header. No divider to track, and no border down
@@ -303,6 +602,15 @@ export function DiffWindow() {
       )}
       {!failed && phase === "ready" && diff !== null && !diff.binary && (
         <DiffPane
+          // Insurance, not the mechanism: setting `diff` to null during a
+          // navigation already unmounts the pane through the guard above. It is
+          // here because if a later change ever kept the pane mounted across a
+          // file change, the failures would be severe and silent — the undo
+          // history would survive, so Ctrl+Z in the new file would undo into the
+          // previous one's text and auto-save it, and the language extensions,
+          // appended with `StateEffect.appendConfig` and never removed, would
+          // stack for the life of the window.
+          key={diff.path}
           left={diff.left ?? ""}
           right={diff.right ?? ""}
           rightRevision={rightRevision}

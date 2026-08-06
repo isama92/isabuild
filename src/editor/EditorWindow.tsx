@@ -9,8 +9,10 @@
 // "something needs your attention" should not look like two different apps
 // depending on which window you are in.
 //
-// The toolbar is not a slot here. It is rendered by the pane components, which is
-// where the live editor is: see EditorToolbar's own comment.
+// The pane's *own* toolbar is not a slot here. It is rendered by the pane
+// components, which is where the live editor is: see EditorToolbar's own comment.
+// The `toolbar` slot below is for the other kind — controls that must outlive the
+// pane, because they are how you get a different pane.
 
 import type { ReactNode } from "react";
 
@@ -32,6 +34,16 @@ export interface EditorWindowProps {
   className?: string;
   header: ReactNode;
   /**
+   * A row above the header, for controls the *window* owns rather than the pane.
+   *
+   * The diff window's file navigation lives here rather than in the pane's own
+   * toolbar because the pane is unmounted during every load and for a binary file
+   * — a "10 / 26 files" counter rendered there would vanish at exactly the moment
+   * it is being used, and the button you just pressed would disappear under the
+   * cursor. The merge window passes none.
+   */
+  toolbar?: ReactNode;
+  /**
    * Shown above the body, in order. An error is `role="alert"` and anything else
    * `role="status"`, so a save failure interrupts a screen reader and a hint does
    * not.
@@ -46,9 +58,16 @@ const ROLE: Record<NoticeTone, "alert" | "status"> = {
   error: "alert",
 };
 
-export function EditorWindow({ className, header, notices = [], children }: EditorWindowProps) {
+export function EditorWindow({
+  className,
+  header,
+  toolbar,
+  notices = [],
+  children,
+}: EditorWindowProps) {
   return (
     <div className={className === undefined ? "ew-window" : `ew-window ${className}`}>
+      {toolbar}
       <div className="ew-header">{header}</div>
       {notices.map((notice) => (
         <p className={`ew-notice ew-notice--${notice.tone}`} role={ROLE[notice.tone]} key={notice.id}>

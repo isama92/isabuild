@@ -23,6 +23,7 @@ vi.mock("../hooks/useAppearance", () => ({ useAppearanceSync: vi.fn() }));
 
 const close = vi.fn();
 const destroy = vi.fn();
+const setTitle = vi.fn().mockResolvedValue(undefined);
 const unlistenClose = vi.fn();
 const unlistenRepo = vi.fn();
 
@@ -116,6 +117,7 @@ beforeEach(() => {
   vi.mocked(getCurrentWindow).mockReturnValue({
     close,
     destroy,
+    setTitle,
     onCloseRequested: (handler: (event: { preventDefault: () => void }) => Promise<void>) => {
       fireClose = handler;
       return Promise.resolve(unlistenClose);
@@ -374,5 +376,99 @@ describe("following the file", () => {
     await settle();
     unmount();
     expect(unlistenRepo).toHaveBeenCalled();
+  });
+});
+
+describe("a navigable window", () => {
+  /** A harness that hands `navigate` out, since `seen` is the base target type. */
+  let navigateTo: ((params: Params) => void) | null = null;
+
+  function NavigableHarness(options: Partial<EditorWindowOptions<Params>> = {}) {
+    const target = useEditorWindow<Params>({
+      scope: "diff",
+      parse,
+      titlePrefix: "Diff",
+      pathOf: (params) => params.path,
+      ...options,
+      // After the spread, so it stays the literal `true` the overload keys on.
+      // Widened to `boolean` it selects the plain `WindowTarget` overload, which
+      // is the overload working — a window is navigable at the type level or not
+      // at all, never conditionally.
+      navigable: true,
+    });
+    useEffect(() => {
+      seen = target;
+      navigateTo = target.navigate;
+    }, [target]);
+    return null;
+  }
+
+  beforeEach(() => {
+    navigateTo = null;
+  });
+
+  it("shows the file it is pointed at", () => {
+    render(<NavigableHarness />);
+    act(() => navigateTo?.({ repo: "/r", path: "src/b.ts" }));
+    expect(seen?.params).toEqual({ repo: "/r", path: "src/b.ts" });
+  });
+
+  it("re-titles the document and the window it is in", () => {
+    render(<NavigableHarness />);
+    act(() => navigateTo?.({ repo: "/r", path: "src/b.ts" }));
+
+    expect(document.title).toBe("Diff: src/b.ts");
+    // The native title is set once by the opener and does not follow
+    // `document.title`, so without this the taskbar keeps naming the first file.
+    expect(setTitle).toHaveBeenLastCalledWith("Diff: src/b.ts");
+  });
+
+  it("keeps the watcher subscription across a navigation", async () => {
+    // The regression the `hasTarget` dependency exists for. Keyed on
+    // `target.params` this would unlisten and re-listen on every navigation — a
+    // wasted round trip, and a window in which repo events are dropped with
+    // nothing on screen to explain the refresh that never came.
+    render(<NavigableHarness onRepoEvent={vi.fn()} />);
+    await settle();
+    expect(onRepoChanged).toHaveBeenCalledTimes(1);
+
+    await act(async () => navigateTo?.({ repo: "/r", path: "src/b.ts" }));
+
+    expect(onRepoChanged).toHaveBeenCalledTimes(1);
+    expect(unlistenRepo).not.toHaveBeenCalled();
+  });
+
+  it("keeps the target's identity across a re-render", () => {
+    // Consumers put it in dependency arrays, and several of the hook's own effects
+    // key on it.
+    const { rerender } = render(<NavigableHarness />);
+    const first = seen;
+    rerender(<NavigableHarness />);
+    expect(seen).toBe(first);
+  });
+
+  it("drops the error once it is pointed at a real file", () => {
+    // The error described the URL, and the URL is no longer what is being shown.
+    window.history.replaceState({}, "", "/diff.html");
+    render(<NavigableHarness />);
+    expect(seen?.error).toBeDefined();
+
+    act(() => navigateTo?.({ repo: "/r", path: "src/b.ts" }));
+
+    expect(seen?.error).toBeUndefined();
+    expect(seen?.params).toEqual({ repo: "/r", path: "src/b.ts" });
+  });
+
+  it("is the only kind of window that can be pointed anywhere", () => {
+    // The merge window must not be: its result buffer lives in memory until every
+    // conflict is decided, so loading something else in place has no safe meaning.
+    render(<Harness />);
+    expect((seen as { navigate?: unknown }).navigate).toBeUndefined();
+  });
+
+  it("is the only kind of window that renames itself", () => {
+    // Which is why no other capability file needs `core:window:allow-set-title`.
+    render(<Harness />);
+    expect(setTitle).not.toHaveBeenCalled();
   });
 });

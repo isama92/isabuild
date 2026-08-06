@@ -29,6 +29,29 @@ export interface WindowTarget<P> {
   error?: string;
 }
 
+/**
+ * A window that may be pointed at another file after it opens.
+ *
+ * Only the diff window asks for this, and the overloads below are what make that
+ * a compile error rather than a convention. The merge window must not have it:
+ * its result buffer lives in memory until every conflict is decided, so "load
+ * something else in place" has no safe meaning there.
+ */
+export interface NavigableWindowTarget<P> extends WindowTarget<P> {
+  /**
+   * Show `params` instead, re-titling the window and re-running whatever the
+   * caller keyed on the target.
+   *
+   * The URL is deliberately *not* rewritten. `history.replaceState` throws
+   * `SecurityError` on the `tauri://` custom scheme used in production on Linux
+   * and macOS, while working in dev and under vitest — the worst failure shape
+   * available. A Tauri window has no address bar, so nothing is lost by it: a
+   * reload returns the window to the file it was opened with, and the window
+   * re-registers on mount, so the backend's record cannot outlive the truth.
+   */
+  navigate: (params: P) => void;
+}
+
 export interface EditorWindowOptions<P> {
   scope: Scope;
   /** Throws when the window was opened without a target. */
@@ -56,24 +79,53 @@ export interface EditorWindowOptions<P> {
   onCloseRequest?: () => boolean | Promise<boolean>;
   /** Extra hardcoded accelerator, for the diff window's Ctrl/Cmd+S. */
   accelerator?: { key: string; run: () => void };
+  /**
+   * Whether this window may change which file it shows. Off by default.
+   *
+   * Also what gates the native `setTitle` call, so no other window needs
+   * `core:window:allow-set-title` in its capability file.
+   */
+  navigable?: boolean;
 }
 
-export function useEditorWindow<P>(options: EditorWindowOptions<P>): WindowTarget<P> {
-  const { scope, parse, titlePrefix, pathOf, onRepoEvent, onCloseRequest, accelerator } = options;
+export function useEditorWindow<P>(
+  options: EditorWindowOptions<P> & { navigable: true },
+): NavigableWindowTarget<P>;
+export function useEditorWindow<P>(options: EditorWindowOptions<P>): WindowTarget<P>;
+export function useEditorWindow<P>(
+  options: EditorWindowOptions<P>,
+): WindowTarget<P> | NavigableWindowTarget<P> {
+  const {
+    scope,
+    parse,
+    titlePrefix,
+    pathOf,
+    onRepoEvent,
+    onCloseRequest,
+    accelerator,
+    navigable = false,
+  } = options;
 
   // Reads the settings, follows other windows' changes, and pushes the theme and
   // font at the CSS custom properties the panes read.
   useAppearanceSync();
 
-  // The target never changes for the life of the window: it is in the URL the
-  // opener built, and nothing can navigate this webview.
-  const [target] = useState<WindowTarget<P>>(() => {
+  // Where the window starts: the URL the opener built. For a `navigable` window
+  // that is only the starting point — see `navigate` below — and for every other
+  // window it is the whole story, because nothing can navigate the webview.
+  const [target, setTarget] = useState<WindowTarget<P>>(() => {
     try {
       return { params: parse(window.location.search) };
     } catch (error) {
       return { error: error instanceof Error ? error.message : String(error) };
     }
   });
+
+  const navigate = useCallback((params: P) => {
+    // Replaces rather than merges: the error, if there was one, described the URL,
+    // and the URL is no longer what is being shown.
+    setTarget({ params });
+  }, []);
 
   // Callbacks through refs, so a caller passing fresh closures each render (the
   // normal way) does not re-subscribe the window-level listeners every time.
@@ -95,12 +147,28 @@ export function useEditorWindow<P>(options: EditorWindowOptions<P>): WindowTarge
   );
 
   useEffect(() => {
-    if (path !== null) document.title = `${titlePrefix}: ${path}`;
-  }, [path, titlePrefix]);
+    if (path === null) return;
+    const title = `${titlePrefix}: ${path}`;
+    document.title = title;
+    // The *native* title is set once by the opener and does not follow
+    // `document.title`, so a window that can change file has to keep it in step
+    // itself — otherwise the taskbar entry names the file the window was opened
+    // with for the rest of its life. Only for a navigable window, so no other
+    // capability file needs `core:window:allow-set-title`. Failure is swallowed: a
+    // wrong title is a blemish, an unhandled rejection is a bug report.
+    if (navigable) void getCurrentWindow().setTitle(title).catch(() => undefined);
+  }, [navigable, path, titlePrefix]);
 
   // Follow the file: the same watcher event the Status panel refreshes on.
+  //
+  // Keyed on *whether* there is a target, never on which one. A navigable window
+  // replaces `target.params` on every navigation, and depending on it would tear
+  // this subscription down and re-`listen` each time — a wasted IPC round trip,
+  // and a window during which repo events are dropped with nothing on screen to
+  // explain the refresh that never came.
+  const hasTarget = target.params !== undefined;
   useEffect(() => {
-    if (target.params === undefined || onRepoEvent === undefined) return;
+    if (!hasTarget || onRepoEvent === undefined) return;
     let unlisten: (() => void) | undefined;
     let cancelled = false;
     void onRepoChanged(() => {
@@ -119,7 +187,7 @@ export function useEditorWindow<P>(options: EditorWindowOptions<P>): WindowTarge
     // `onRepoEvent` is read through a ref; only whether there *is* one matters,
     // and that never changes for a given window.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [target.params]);
+  }, [hasTarget]);
 
   // Work in hand must not vanish with the window. `close()` — ours, the OS
   // button, or the main window taking its secondary windows with it — routes
@@ -210,5 +278,11 @@ export function useEditorWindow<P>(options: EditorWindowOptions<P>): WindowTarge
     return () => window.removeEventListener("keydown", onKeyDown);
   }, []);
 
-  return target;
+  // Memoised on the target's identity, which callers put in dependency arrays and
+  // which several of the effects above key on. A fresh object every render would
+  // make all of that mean nothing.
+  return useMemo(
+    () => (navigable ? { ...target, navigate } : target),
+    [navigable, navigate, target],
+  );
 }
