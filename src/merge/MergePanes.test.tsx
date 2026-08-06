@@ -118,6 +118,12 @@ function arrowsIn(testId: string): NodeListOf<Element> {
   return screen.getByTestId(testId).querySelectorAll(".isabuild-arrow");
 }
 
+/** A pane's leading gutter columns, in the order CodeMirror laid them out. */
+function leadingGutters(testId: string): string[] {
+  const before = screen.getByTestId(testId).querySelector(".cm-gutters-before");
+  return Array.from(before?.children ?? []).map((element) => element.className);
+}
+
 /** One pane's padding, in blank lines, top to bottom. */
 function spacersIn(testId: string): number[] {
   return Array.from(screen.getByTestId(testId).querySelectorAll<HTMLElement>(".isabuild-spacer")).map(
@@ -218,12 +224,52 @@ describe("MergePanes", () => {
     });
 
     it("offers none for a side the chunk already holds", () => {
-      // The result already has our version of an ours-only chunk, so a `»` there
-      // would be a no-op. Theirs can still be taken — that is how an auto-applied
-      // change gets replaced.
+      // The result already has our version of an ours-only chunk, so an arrow
+      // there would be a no-op. Theirs can still be taken — that is how an
+      // auto-applied change gets replaced.
       setup({ chunks: [chunk("ours", [0, 6], [0, 6], [0, 6], [0, 14])] });
       expect(arrowsIn("pane-ours")).toHaveLength(0);
       expect(arrowsIn("pane-theirs")).toHaveLength(1);
+    });
+
+    it("puts our arrows on the seam with the result, not on the far left", () => {
+      // The panes are ours | result | theirs, and a gutter defaults to its own
+      // pane's *left* edge — which put this column at the far left of the whole
+      // window, pointing right at a pane three columns away. `side: "after"` is
+      // what moves it. Structural, so jsdom can assert it; that it *looks* right
+      // is the manual pass.
+      setup();
+      const after = screen.getByTestId("pane-ours").querySelector(".cm-gutters-after");
+      expect(after?.querySelector(".isabuild-arrow-gutter")).not.toBeNull();
+      expect(
+        screen.getByTestId("pane-ours").querySelector(".cm-gutters-before .isabuild-arrow-gutter"),
+      ).toBeNull();
+    });
+
+    it("puts their arrows ahead of their line numbers, on the other seam", () => {
+      // Their pane's left edge is already the seam with the result, so this one
+      // only had to come out from behind the line numbers. `Prec.high` does it:
+      // gutters are ordered by extension precedence.
+      setup();
+      const columns = leadingGutters("pane-theirs");
+
+      expect(columns.some((name) => name.includes("cm-lineNumbers"))).toBe(true);
+      expect(columns.findIndex((name) => name.includes("isabuild-arrow-gutter"))).toBe(0);
+      expect(columns.findIndex((name) => name.includes("isabuild-arrow-gutter"))).toBeLessThan(
+        columns.findIndex((name) => name.includes("cm-lineNumbers")),
+      );
+    });
+
+    it("draws each arrow as an icon that says what it does", () => {
+      // CodeMirror marks the whole gutter `aria-hidden`, so the title is for a
+      // pointer and the toolbar is the accessible route to the same actions.
+      setup();
+      const arrow = screen.getByTestId("pane-ours").querySelector(".isabuild-arrow svg");
+      expect(arrow).not.toBeNull();
+      expect(arrow).toHaveAttribute("title", "Replace this chunk with your version");
+      expect(
+        screen.getByTestId("pane-theirs").querySelector(".isabuild-arrow svg"),
+      ).toHaveAttribute("title", "Replace this chunk with their version");
     });
   });
 

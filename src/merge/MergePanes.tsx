@@ -32,6 +32,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   EditorState,
+  Prec,
   StateEffect,
   StateField,
   type Text,
@@ -97,6 +98,7 @@ import {
 } from "../editor/codemirror";
 import { EditorToolbar, type ToolbarItem } from "../editor/EditorToolbar";
 import { Icons } from "../editor/icons";
+import { iconElement, type IconName } from "../editor/iconElement";
 import { useViewOptions } from "../editor/useViewOptions";
 import { viewOptionItems } from "../editor/viewOptions";
 import type { ConflictStages } from "../lib/gitMerge";
@@ -287,21 +289,33 @@ function spacerDecorations(
 }
 
 class ArrowMarker extends GutterMarker {
-  constructor(private readonly glyph: string) {
+  constructor(
+    private readonly icon: IconName,
+    private readonly title: string,
+  ) {
     super();
   }
 
   override elementClass = "isabuild-arrow";
 
   override toDOM() {
-    return document.createTextNode(this.glyph);
+    const element = iconElement(this.icon);
+    // A `title` rather than an `aria-label`: CodeMirror marks the whole gutter
+    // `aria-hidden`, so nothing here reaches a screen reader whatever it is
+    // labelled. The toolbar's Take mine / Take theirs are the accessible route to
+    // the same actions, as the change strip's marks are to the same chunks.
+    element.setAttribute("title", this.title);
+    return element;
   }
 }
 
-/** `»` applies our side rightwards into the result; `«` brings theirs leftwards. */
+/**
+ * An arrow points from the side it takes towards the result, and each gutter is
+ * placed on the seam between those two panes — see the note in `sidePane`.
+ */
 const ARROWS: Record<SideName, GutterMarker> = {
-  ours: new ArrowMarker("»"),
-  theirs: new ArrowMarker("«"),
+  ours: new ArrowMarker("chevrons-right", "Replace this chunk with your version"),
+  theirs: new ArrowMarker("chevrons-left", "Replace this chunk with their version"),
 };
 
 export function MergePanes({ path, stages, value, onChange, busy }: MergePanesProps) {
@@ -559,31 +573,52 @@ export function MergePanes({ path, stages, value, onChange, busy }: MergePanesPr
         if (index === undefined) return null;
         return actionsFor(model[index].kind)[side] ? index : null;
       };
+      /**
+       * The arrow column, placed on the seam between this pane and the result.
+       *
+       * A gutter defaults to `side: "before"`, which is its own pane's *left*
+       * edge — and the panes are ours | result | theirs, so that put the ours `»`
+       * at the far left of the whole window, pointing right at a pane three
+       * columns away, while the theirs `«` sat behind its own line numbers. An
+       * arrow belongs between the side it takes from and the side it goes to.
+       *
+       * So ours goes `after`, flush against the ours/result seam, and theirs stays
+       * `before` but is raised above `lineNumbers()` so it renders ahead of them
+       * rather than inside the pane. `Prec.high` is what does the raising:
+       * `activeGutters` is ordered by extension precedence, and `paneExtensions`
+       * contributes the line numbers first.
+       *
+       * No new grid column and no absolute positioning: `.cm-gutters-after` is
+       * positioned by CodeMirror's own base theme, and `lib/mergeAlign` is purely
+       * vertical, so none of this can disturb the alignment.
+       */
+      const arrows = gutter({
+        class: "isabuild-arrow-gutter",
+        side: side === "ours" ? "after" : "before",
+        lineMarker: (view, line) => (chunkFor(view, line.from) === null ? null : ARROWS[side]),
+        // The arrows follow the chunk model, which never changes for the life of a
+        // read-only pane.
+        lineMarkerChange: () => false,
+        domEventHandlers: {
+          mousedown: (view, line) => {
+            const index = chunkFor(view, line.from);
+            if (index === null) return false;
+            apply(index, side);
+            return true;
+          },
+        },
+      });
+
       return new EditorView({
         parent: host,
         state: EditorState.create({
           doc,
           extensions: [
+            side === "theirs" ? Prec.high(arrows) : arrows,
             ...paneExtensions(currentAppearance()?.theme ?? DEFAULT_THEME),
             ...readOnlyExtensions(),
             spacerField,
             sideDecorationField(model, side),
-            gutter({
-              class: "isabuild-arrow-gutter",
-              lineMarker: (view, line) =>
-                chunkFor(view, line.from) === null ? null : ARROWS[side],
-              // The arrows follow the chunk model, which never changes for the
-              // life of a read-only pane.
-              lineMarkerChange: () => false,
-              domEventHandlers: {
-                mousedown: (view, line) => {
-                  const index = chunkFor(view, line.from);
-                  if (index === null) return false;
-                  apply(index, side);
-                  return true;
-                },
-              },
-            }),
           ],
         }),
       });

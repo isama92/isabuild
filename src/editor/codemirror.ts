@@ -113,14 +113,26 @@ function themeFor(theme: Theme): Extension {
         backgroundColor: t.chunkConflict,
         fontStyle: "italic",
       },
-      // The chunk gutter: an arrow per actionable chunk.
+      // The chunk gutter: an arrow per actionable chunk, on the seam between the
+      // side it takes from and the result. `display: flex` rather than
+      // `text-align`, because the marker is an `<svg>` now rather than a glyph.
       ".cm-gutterElement.isabuild-arrow": {
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
         cursor: "pointer",
         color: t.textDim,
-        textAlign: "center",
         width: "16px",
       },
       ".cm-gutterElement.isabuild-arrow:hover": { color: t.textBright },
+      ".cm-gutterElement.isabuild-arrow svg": { width: "14px", height: "14px" },
+      // The arrow column sits against the pane's edge with nothing between it and
+      // the next pane, so it needs the seam drawn. The package gives
+      // `.cm-gutters-after` a left border in its light theme only; both sides get
+      // one here, from the registry.
+      ".cm-gutters.isabuild-arrow-gutter, .cm-gutters-after": {
+        borderLeft: `1px solid ${t.border}`,
+      },
 
       // --- @codemirror/merge's own classes, retinted from the registry -------
       //
