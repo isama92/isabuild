@@ -496,6 +496,7 @@ export function DiffPane({
           },
         ],
       },
+      { kind: "spacer", id: "gap" },
       {
         kind: "status",
         id: "count",

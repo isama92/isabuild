@@ -96,6 +96,7 @@ import {
   themeTransaction,
 } from "../editor/codemirror";
 import { EditorToolbar, type ToolbarItem } from "../editor/EditorToolbar";
+import { Icons } from "../editor/icons";
 import { useViewOptions } from "../editor/useViewOptions";
 import { viewOptionItems } from "../editor/viewOptions";
 import type { ConflictStages } from "../lib/gitMerge";
@@ -742,16 +743,18 @@ export function MergePanes({ path, stages, value, onChange, busy }: MergePanesPr
           {
             kind: "button",
             id: "previous-conflict",
-            label: "◂ Previous",
+            label: "Previous conflict",
             tooltip: "Scroll to the previous conflict",
+            icon: Icons.previousChange,
             disabled: remaining === 0,
             onSelect: () => goToConflict("previous"),
           },
           {
             kind: "button",
             id: "next-conflict",
-            label: "Next ▸",
+            label: "Next conflict",
             tooltip: "Scroll to the next conflict",
+            icon: Icons.nextChange,
             disabled: remaining === 0,
             onSelect: () => goToConflict("next"),
           },
@@ -764,6 +767,9 @@ export function MergePanes({ path, stages, value, onChange, busy }: MergePanesPr
           ? `Chunk ${(currentChunk ?? 0) + 1} of ${chunks.length} — ${chunkLabel(chunk.kind)}`
           : "No chunk selected",
       },
+      // The status stops growing where it ends, so this is what pins the actions
+      // to the right edge.
+      { kind: "spacer", id: "gap" },
       // Every chunk is actionable, not only conflicts: taking the base is how a
       // change git applied for you gets rejected, and taking the other side is how
       // it gets replaced. A side the chunk already holds is never offered.
