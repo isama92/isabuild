@@ -218,6 +218,12 @@ export function SplitPanes({
     // What the previous pane held, which is not always what the window last read
     // from disk. See `DiffHandoff`.
     const handoff = takeHandoffRef.current();
+    // The revision the handed-over document belongs to, not this render's prop.
+    // They differ when an adopt from disk lands in the same commit as a mode
+    // switch: the incoming pane then holds pre-adopt content, and seeding from the
+    // prop would tell it the adopt had already been taken, leaving it on stale
+    // content until the next revision moved.
+    if (handoff) adoptedRef.current = handoff.revision;
     const startingDoc = handoff?.doc ?? seed.right;
 
     const merge = new MergeView({

@@ -86,7 +86,14 @@ export function DiffWindow() {
   const [navigateInsisted, setNavigateInsisted] = useState(false);
   /** Whether a navigation is already in flight. Alt+ArrowRight autorepeats. */
   const navigatingRef = useRef(false);
-  /** Where the window sat before the list last moved; see `reanchor`. */
+  /**
+   * Where the window sat before the list last moved; see `reanchor`.
+   *
+   * Read only from `step`, an event handler, which is why a ref is right here: the
+   * toolbar does not need it. "Not in the list" is neither the first entry nor the
+   * last, so both buttons fall out enabled without anyone having to remember where
+   * the file used to be.
+   */
   const lastIndexRef = useRef(0);
   /** Guards overlapping status reads, one per debounced watcher event. */
   const statusInFlightRef = useRef(false);
@@ -361,6 +368,16 @@ export function DiffWindow() {
    *    it negative when the in-flight write lands, which would leave the close
    *    guard's `savesInFlightRef.current === 0` false for the rest of the window's
    *    life.
+   *
+   * **Known gap.** This does not consult the registry, so with two diff windows
+   * open, stepping one of them onto the file the other is showing puts two editors
+   * on one path — the state `src-tauri/src/diffwindows.rs` exists to prevent,
+   * reached by the front door instead of the back one. It is not destructive (the
+   * two converge through `shouldAdoptDiskContent` unless both are being typed in
+   * at once) and it needs two windows open to reach, but closing it means choosing
+   * between skipping the file, focusing the other window, and allowing it — three
+   * different products. Recorded in the README entry as outstanding rather than
+   * decided here.
    */
   const goToFile = useCallback(
     async (next: DiffParams) => {
@@ -534,7 +551,11 @@ export function DiffWindow() {
           label: "Previous changed file",
           tooltip: "Show the previous changed file in this window",
           icon: Icons.previousFile,
-          disabled: position.index <= 0,
+          // A file that has left the list is neither the first entry nor the last,
+          // so both buttons stay live and `step` reanchors to the slot it held.
+          // Disabling them there would leave a counter reporting 26 files above
+          // two dead controls.
+          disabled: position.total === 0 || position.index === 0,
           onSelect: () => step(-1),
         },
         {
@@ -543,7 +564,7 @@ export function DiffWindow() {
           label: "Next changed file",
           tooltip: "Show the next changed file in this window",
           icon: Icons.nextFile,
-          disabled: position.index === -1 || position.index >= position.total - 1,
+          disabled: position.total === 0 || position.index === position.total - 1,
           onSelect: () => step(1),
         },
       ],

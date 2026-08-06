@@ -432,6 +432,28 @@ describe("the view mode", () => {
     expect(docOf(container, "b")).toBe("typed one\nTWO\nthree\n");
   });
 
+  it("takes an adopt that arrives just after the switch", () => {
+    // A disk read landing on the heels of a mode switch must still win over the
+    // handed-over edit — an adopt is the window saying "this is what is on disk
+    // now", and the pane has to follow it.
+    //
+    // The variant where the two land in the *same* React commit is what
+    // `DiffHandoff.revision` guards, and it is not reachable from here: the store
+    // update and the prop change come from different async sources, and `act`
+    // flushes the first before the second. Noted rather than faked.
+    const { container, rerender } = render(<DiffPane {...props()} />);
+    act(() => {
+      pane(container, "b").dispatch({ changes: { from: 0, insert: "typed " } });
+    });
+
+    act(() => {
+      useSettingsStore.setState({ settings: settings({ "unified-view": true }) });
+      rerender(<DiffPane {...props({ right: "from disk\n", rightRevision: 1 })} />);
+    });
+
+    expect(unifiedView(container).state.doc.toString()).toBe("from disk\n");
+  });
+
   it("keeps the cursor where it was", () => {
     // Both modes index the same working-tree string, so a document offset means
     // the same thing on either side of the switch and needs no mapping.
@@ -581,10 +603,13 @@ describe("the one-pane view's restore control", () => {
 });
 
 describe("the revert control", () => {
-  it("is configured to restore from HEAD into the working file", () => {
-    // The column exists as soon as the MergeView does; the buttons inside it are
-    // placed from measured chunk positions, so jsdom has none — clicking one is a
-    // manual check.
+  it("gives the two panes a column for it", () => {
+    // Only that, and the name says so. `@codemirror/merge` adds `.cm-merge-revert`
+    // whichever way the controls point, and the buttons inside it are placed from
+    // measured chunk positions, so jsdom has none to inspect. That they restore
+    // *from HEAD into the working tree* rather than the other way is not
+    // observable here — the equivalent control in the one-pane view is clickable
+    // and has a real test, and this one is a manual check.
     const { container } = render(<DiffPane {...props()} />);
     expect(container.querySelector(".cm-merge-revert")).toBeInTheDocument();
   });

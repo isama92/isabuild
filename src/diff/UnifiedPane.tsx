@@ -106,6 +106,8 @@ export function UnifiedPane({
   const handoffRef = useRef(onHandoff);
   const stripesRef = useRef<ReturnType<typeof computeStripes>>([]);
   const measureFrameRef = useRef<number | null>(null);
+  /** Whether the merge extension has been rebuilt since construction. */
+  const reconfiguredRef = useRef(false);
 
   // Declared before the construction effect so it always runs first.
   useEffect(() => {
@@ -211,6 +213,15 @@ export function UnifiedPane({
     const seed = seedRef.current;
     const handoff = takeHandoffRef.current();
     const startingDoc = handoff?.doc ?? seed.right;
+    // The revision the handed-over document belongs to, rather than this mount's
+    // prop. They can differ if an adopt from disk lands in the same React commit
+    // as the mode switch: the seed is then pre-adopt content, and taking the
+    // revision from the prop would say the adopt had already been applied, leaving
+    // the pane on stale content until the next one moved. Narrow enough that no
+    // test in this repo reaches it — the store update and the prop change come
+    // from different async sources and normally land in separate commits — so this
+    // is defensive, and `DiffHandoff.revision` exists for it.
+    if (handoff) adoptedRef.current = handoff.revision;
 
     const view = new EditorView({
       parent: host,
@@ -312,6 +323,16 @@ export function UnifiedPane({
   useEffect(() => {
     const view = viewRef.current;
     if (!view) return;
+    // Not on mount: the construction effect already built the extension with these
+    // exact values, and a reconfigure is not free here. Unlike a MergeView's, it
+    // re-initialises `ChunkField` — claim 1 in the header — so an unguarded first
+    // run means a second full diff on every mount, and a mount happens on every
+    // file navigation and every mode switch. `DIFF_TIMEOUT_MS` bounds each one at
+    // a quarter second, which is exactly the reason not to spend a spare.
+    if (!reconfiguredRef.current) {
+      reconfiguredRef.current = true;
+      return;
+    }
     view.dispatch({
       effects: mergeCompartment.reconfigure(
         mergeExtension(headRef.current, collapse, rightEditable),

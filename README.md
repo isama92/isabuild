@@ -253,6 +253,13 @@ Each part is an independent piece of work, executed in order, and its entry belo
       restores a block from HEAD and Compact works there; in the merge window each chevron sits on
       the seam between the pane it takes from and the result, and the three panes stay aligned when
       scrolled; and the native window title follows the file in the taskbar.
+      **Outstanding, and a decision rather than a bug to fix:** stepping between files does not
+      consult the registry, only opening from the Status panel does. So with two diff windows
+      open, Alt+Right in one of them can land it on the file the other is showing — the two-editors
+      -on-one-path state the registry exists to prevent, reached by the front door. It is not
+      destructive (they converge through `shouldAdoptDiskContent` unless both are being typed in at
+      once) and it takes two open windows to reach, but closing it means picking between skipping
+      that file, focusing the other window, and allowing it, and those are three different products.
       Accepted costs, none of which are worth coding around: Ctrl+F cannot reach the HEAD side in
       unified mode, because there is no second editor to focus — Split stays the default; the undo
       history and the find query are lost when the view mode changes, because the editor is rebuilt;

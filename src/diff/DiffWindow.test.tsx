@@ -521,6 +521,13 @@ describe("DiffWindow", () => {
 });
 
 describe("stepping between changed files", () => {
+  /** The default accelerator for next/previous file. Bubble phase, as the hook listens. */
+  function pressAltArrow(code: "ArrowLeft" | "ArrowRight") {
+    window.dispatchEvent(
+      new KeyboardEvent("keydown", { code, altKey: true, bubbles: true, cancelable: true }),
+    );
+  }
+
   /** Press Next file, and let the flush and the load settle. */
   async function nextFile() {
     await act(async () => {
@@ -743,18 +750,109 @@ describe("stepping between changed files", () => {
   });
 
   it("does not stack navigations when the key is held down", async () => {
+    // Alt+ArrowRight autorepeats. The guard only has anything to do when
+    // `goToFile` actually suspends, so there has to be an edit for it to flush and
+    // that flush has to be in flight when the second press arrives — otherwise the
+    // whole of `goToFile` runs synchronously and the flag is back down before the
+    // second press could see it.
     await renderReady();
     await screen.findByText("2 / 3 files");
+
+    let releaseWrite: () => void = () => {};
+    writeWorkingFileMock.mockImplementationOnce(
+      () =>
+        new Promise<void>((resolve) => {
+          releaseWrite = () => resolve();
+        }),
+    );
+    fireEvent.change(screen.getByLabelText("modified"), { target: { value: "edited\n" } });
     getFileDiffMock.mockResolvedValue(fileDiff({ path: "src/after.ts" }));
     const before = getFileDiffMock.mock.calls.length;
 
+    // First press suspends on the flush; the second must be refused outright.
     await act(async () => {
-      const button = screen.getByRole("button", { name: "Next changed file" });
-      button.click();
-      button.click();
+      pressAltArrow("ArrowRight");
+    });
+    await act(async () => {
+      pressAltArrow("ArrowRight");
+    });
+    await act(async () => {
+      releaseWrite();
     });
 
+    expect(writeWorkingFileMock).toHaveBeenCalledTimes(1);
     expect(getFileDiffMock.mock.calls.length - before).toBe(1);
+  });
+
+  it("walks the list on Alt+Arrow, the accelerator the settings offer", async () => {
+    // The buttons and the keybinding are separate paths into `step`, and until now
+    // only the buttons were covered.
+    await renderReady();
+    await screen.findByText("2 / 3 files");
+    getFileDiffMock.mockResolvedValue(fileDiff({ path: "src/after.ts" }));
+
+    await act(async () => {
+      pressAltArrow("ArrowRight");
+    });
+
+    expect(getFileDiffMock).toHaveBeenLastCalledWith({
+      repoRoot: "/r",
+      path: "src/after.ts",
+      origPath: undefined,
+    });
+  });
+
+  it("walks it backwards on Alt+ArrowLeft", async () => {
+    await renderReady();
+    await screen.findByText("2 / 3 files");
+    getFileDiffMock.mockResolvedValue(fileDiff({ path: "src/before.ts" }));
+
+    await act(async () => {
+      pressAltArrow("ArrowLeft");
+    });
+
+    expect(getFileDiffMock).toHaveBeenLastCalledWith({
+      repoRoot: "/r",
+      path: "src/before.ts",
+      origPath: undefined,
+    });
+  });
+
+  it("keeps both buttons alive when the file it shows has left the list", async () => {
+    // `reanchor` holds the old slot, and the toolbar has to let you use it — the
+    // counter says there are still files, so two dead buttons would read as a bug.
+    await renderReady();
+    await screen.findByText("2 / 3 files");
+
+    // src/a.ts is gone, and the slot it held — index 1 — still has files either
+    // side of it, so both directions are genuinely available.
+    getStatusMock.mockResolvedValue({
+      repoRoot: "/r",
+      staged: [],
+      unstaged: [
+        { path: "src/before.ts", status: "modified" },
+        { path: "src/middle.ts", status: "modified" },
+        { path: "src/after.ts", status: "modified" },
+      ],
+      conflicts: [],
+    });
+    await act(async () => {
+      fireRepoChanged();
+    });
+    await screen.findByText("— / 3 files");
+
+    expect(screen.getByRole("button", { name: "Next changed file" })).toBeEnabled();
+    expect(screen.getByRole("button", { name: "Previous changed file" })).toBeEnabled();
+
+    getFileDiffMock.mockResolvedValue(fileDiff({ path: "src/after.ts" }));
+    await nextFile();
+
+    // Lands on whatever now occupies the slot after the one it held.
+    expect(getFileDiffMock).toHaveBeenLastCalledWith({
+      repoRoot: "/r",
+      path: "src/after.ts",
+      origPath: undefined,
+    });
   });
 
   it("keeps its place when the list changes underneath it", async () => {

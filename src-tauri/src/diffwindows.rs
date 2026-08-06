@@ -12,9 +12,12 @@
 //! into another webview's state, and only the backend can check its own record
 //! against the windows that actually exist.
 //!
-//! The decision is [`decide`], a pure function taken outside the lock and outside
-//! Tauri so the interesting cases are testable without a webview — the same split
-//! `status_start` has beside `git_status`.
+//! The decision is [`decide`], factored out of both the locking and the Tauri
+//! plumbing so the interesting cases are testable without a webview — the same
+//! split `status_start` has beside `git_status`. (It is *called* with the guard
+//! still held, which is fine because it only reads. What must not happen under the
+//! lock is the re-entrant `app.emit_to` for a `Reuse`, and that is in
+//! `commands.rs`, after `route` has returned.)
 
 use std::collections::{HashMap, HashSet};
 use std::sync::Mutex;
@@ -79,8 +82,12 @@ impl DiffWindows {
         self.0.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
     }
 
+    /// How many windows are on record. Tests only.
+    ///
+    /// Not `len`: clippy asks any public `len` for an `is_empty` beside it, and a
+    /// registry has no use for one — nothing branches on "no diff windows open".
     #[cfg(test)]
-    pub fn len(&self) -> usize {
+    pub fn recorded(&self) -> usize {
         self.lock().len()
     }
 }
@@ -218,7 +225,7 @@ mod tests {
         let registry = DiffWindows::default();
         registry.set("diff-a".into(), file("/r", "a.ts"));
         registry.set("diff-a".into(), file("/r", "b.ts"));
-        assert_eq!(registry.len(), 1);
+        assert_eq!(registry.recorded(), 1);
         assert_eq!(
             registry.route(&alive(&["diff-a"]), &file("/r", "b.ts"), "diff-b"),
             Route::Focus("diff-a".into())
@@ -240,7 +247,7 @@ mod tests {
     fn removing_a_label_that_was_never_there_is_a_no_op() {
         let registry = DiffWindows::default();
         registry.remove("diff-never");
-        assert_eq!(registry.len(), 0);
+        assert_eq!(registry.recorded(), 0);
     }
 
     #[test]
@@ -253,6 +260,6 @@ mod tests {
 
         registry.route(&alive(&["diff-b"]), &file("/r", "b.ts"), "diff-b");
 
-        assert_eq!(registry.len(), 1);
+        assert_eq!(registry.recorded(), 1);
     }
 }

@@ -204,6 +204,15 @@ function themeFor(theme: Theme): Extension {
         margin: "0 2px",
       },
       ".cm-deletedChunk .cm-chunkButtons button:hover": { color: t.textBright },
+      // `iconElement` deliberately ships no `width`/`height`, so every call site
+      // has to size its own — and an unsized outermost `<svg>` does not shrink to
+      // nothing, it falls back to the default object size. Without this the
+      // chevron would be enormous.
+      ".cm-deletedChunk .cm-chunkButtons button svg": {
+        display: "block",
+        width: "14px",
+        height: "14px",
+      },
       // Only reachable with `allowInlineDiffs`, which is off — but the package's
       // green would survive a later decision to turn it on, so it is retinted now.
       ".cm-inlineChangedLine": { backgroundColor: t.diffInsertedBg },

@@ -205,9 +205,21 @@ body {
    reach it. @codemirror/merge positions the buttons itself; only the colours are
    ours. */
 .cm-merge-revert button {
+  display: flex;
+  align-items: center;
+  justify-content: center;
   color: var(--ib-text-dim);
   line-height: 1;
   padding: 0;
+}
+
+/* `editor/iconElement` ships no width or height, so every call site sizes its
+   own — and an unsized outermost `<svg>` does not shrink to fit, it falls back to
+   the default object size. The package gives the column `width: 1.6em`, which
+   would otherwise be all this had to go on. */
+.cm-merge-revert button svg {
+  width: 14px;
+  height: 14px;
 }
 
 .cm-merge-revert button:hover {
